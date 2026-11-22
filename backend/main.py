@@ -112,6 +112,10 @@ class ConfirmLocationRequest(BaseModel):
     label: Optional[str] = Field(None, max_length=300)
     operator_id: str = "Operator-1"
 
+class MergeRequest(BaseModel):
+    target_id: str
+    operator_id: str = "Operator-1"
+
 class AgencyAckRequest(BaseModel):
     action_id: str
     responder_ref: str = "AMBULANCE-UNIT-108"
@@ -295,6 +299,13 @@ async def confirm_location(incident_id: str, req: ConfirmLocationRequest):
     inc = reasoning_agent.evaluate_incident(inc)
     await broadcast_event("LOCATION_CONFIRMED", inc.model_dump())
     return inc
+
+@app.post("/api/incidents/{incident_id}/merge-into")
+async def merge_into(incident_id: str, req: MergeRequest):
+    """Operator marks this report as the same emergency as target_id (never automatic)."""
+    dup = orchestrator.merge_incident(incident_id, req.target_id, req.operator_id)
+    await broadcast_event("INCIDENT_MERGED", dup.model_dump())
+    return dup
 
 @app.post("/api/incidents/{incident_id}/simulate-ack")
 async def simulate_agency_ack(incident_id: str, req: AgencyAckRequest):

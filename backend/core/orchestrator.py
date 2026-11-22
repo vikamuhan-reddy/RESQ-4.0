@@ -228,6 +228,48 @@ class OrchestrationEngine:
         ))
         return incident
 
+    def merge_incident(self, duplicate_id: str, target_id: str, operator_id: str) -> IncidentRecord:
+        """
+        An operator decides two reports are the same emergency (never automatic). The duplicate's
+        pending dispatches are cancelled so the emergency is not dispatched twice; its report is kept on the target.
+        """
+        if duplicate_id == target_id:
+            raise Conflict("Cannot merge an incident into itself")
+        dup, target = self.get_incident(duplicate_id), self.get_incident(target_id)
+        if dup.is_merged:
+            raise Conflict(f"{duplicate_id} is already merged into {dup.merged_into_id}")
+        if target.is_merged:
+            raise Conflict(f"{target_id} is itself merged into {target.merged_into_id}; merge into that one")
+
+        cancelled, already_sent = [], []
+        for act in dup.coordination_actions:
+            if act.status in (ActionStatus.CREATED, ActionStatus.FAILED):
+                act.status = ActionStatus.CANCELLED
+                act.delivery_note = f"Cancelled: same emergency as {target_id}"
+                db_engine.save_action(act)
+                cancelled.append(act.target_agency)
+            elif act.status != ActionStatus.CANCELLED:
+                already_sent.append(act.target_agency)
+        dup.is_merged = True
+        dup.merged_into_id = target_id
+        dup.operator_notes.append(f"Merged into {target_id} by {operator_id}")
+        target.operator_notes.append(f"Second report {duplicate_id}: {dup.raw_transcript[:300]}")
+        db_engine.save_incident(dup)
+        db_engine.save_incident(target)
+
+        db_engine.log_event(TimelineEvent(
+            incident_id=duplicate_id, event_type="INCIDENT_MERGED", actor=operator_id,
+            summary=f"Merged into {target_id} (same emergency). Cancelled pending dispatch: {', '.join(cancelled) or 'none'}"
+                    + (f". Already sent, not undone: {', '.join(already_sent)}" if already_sent else ""),
+            details={"target": target_id, "cancelled": cancelled, "already_sent": already_sent}
+        ))
+        db_engine.log_event(TimelineEvent(
+            incident_id=target_id, event_type="DUPLICATE_REPORT_MERGED", actor=operator_id,
+            summary=f"Second report {duplicate_id} merged into this incident",
+            details={"duplicate": duplicate_id}
+        ))
+        return dup
+
     def operator_acknowledge(self, incident_id: str, operator_id: str = "Operator-1") -> IncidentRecord:
         incident = self.get_incident(incident_id)
         
@@ -263,6 +305,8 @@ class OrchestrationEngine:
         target_action = self._find_action(incident, action_id)
         if incident.state in CLOSED_STATES:
             raise Conflict(f"Incident {incident_id} is {incident.state.value}; cannot dispatch")
+        if incident.is_merged:
+            raise Conflict(f"Incident {incident_id} was merged into {incident.merged_into_id}; dispatch from that incident")
         if target_action.status not in (ActionStatus.CREATED, ActionStatus.FAILED):
             raise Conflict(f"Action {action_id} is already {target_action.status.value}")
 

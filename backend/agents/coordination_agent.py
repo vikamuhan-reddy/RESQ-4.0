@@ -41,7 +41,7 @@ class CoordinationAgent:
 
     def auto_propose(self, incident: IncidentRecord) -> List[CoordinationAction]:
         """Proposes each routed department once per incident. Nothing is sent until an operator approves."""
-        if incident.state in CLOSED_STATES:
+        if incident.state in CLOSED_STATES or incident.is_merged:
             return []
         already = {a.action_type for a in incident.coordination_actions}
         return [
@@ -64,6 +64,8 @@ class CoordinationAgent:
         """
         if incident.state in CLOSED_STATES:
             raise Conflict(f"Incident {incident.incident_id} is {incident.state.value}; cannot propose dispatch")
+        if incident.is_merged:
+            raise Conflict(f"Incident {incident.incident_id} was merged into {incident.merged_into_id}; dispatch from that incident")
 
         # Generate stable idempotency key if not provided
         idemp_key = custom_idempotency_key or f"IDEMP-{incident.incident_id}-{action_type}"

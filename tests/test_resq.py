@@ -307,6 +307,46 @@ def test_telegram_acknowledge_button():
     assert calls[1][1]["text"].startswith("Acknowledged") and calls[2][1]["text"].startswith("Not acknowledged")
 
 
+def test_duplicate_callers():
+    from datetime import datetime, timedelta
+    from backend.agents.reasoning_agent import reasoning_agent
+    from backend.models.incident import LocationRecord
+
+    def reported(place_query, description, minutes_ago=0, category="Road Accident"):
+        inc = orchestrator.create_incident(category, "en")
+        inc.locations.incident_location = LocationRecord(
+            description=description, search_query=place_query, verification_status=VerificationStatus.UNCERTAIN)
+        inc.fields["reported_injuries"] = FieldProvenance(field_name="reported_injuries", current_value="hurt")
+        inc.created_at = (datetime.utcnow() - timedelta(minutes=minutes_ago)).isoformat()
+        db_engine.save_incident(inc)
+        return inc
+
+    print(">>> 18. Duplicate callers: same place + within 15 min is flagged; other places or old reports are not...")
+    first = reported("Gemini Flyover, Chennai", "Gemini flyover kitta")
+    other_place = reported("Anna Nagar Tower Park, Chennai", "Anna Nagar tower park")
+    old_same_place = reported("Gemini Flyover, Chennai", "Gemini flyover", minutes_ago=40)
+    second = reported("Gemini Flyover, Chennai", "Gemini flyover signal, near the US consulate")
+    second = reasoning_agent.evaluate_incident(second)
+    flagged = [c["incident_id"] for c in second.reasoning.related_incident_candidates]
+    assert first.incident_id in flagged
+    assert other_place.incident_id not in flagged and old_same_place.incident_id not in flagged
+
+    print(">>> 19. Merge: duplicate's pending dispatches cancelled; it can't dispatch again; report kept on target...")
+    coordination_agent.auto_propose(second)
+    assert len(second.coordination_actions) == 2
+    c = TestClient(app)
+    assert c.post(f"/api/incidents/{second.incident_id}/merge-into", json={"target_id": second.incident_id}).status_code == 409
+    r = c.post(f"/api/incidents/{second.incident_id}/merge-into", json={"target_id": first.incident_id, "operator_id": "Op"})
+    assert r.status_code == 200 and r.json()["is_merged"] and r.json()["merged_into_id"] == first.incident_id
+    second = orchestrator.get_incident(second.incident_id)
+    assert all(a.status == ActionStatus.CANCELLED for a in second.coordination_actions)
+    assert_raises(Conflict, orchestrator.operator_approve_action, second.incident_id, second.coordination_actions[0].action_id, "Op")
+    assert coordination_agent.auto_propose(second) == []
+    assert any(second.incident_id in n for n in orchestrator.get_incident(first.incident_id).operator_notes)
+    still_flagged = [c["incident_id"] for c in reasoning_agent.evaluate_incident(first).reasoning.related_incident_candidates]
+    assert second.incident_id not in still_flagged  # merged reports drop out of the candidate list
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
@@ -314,4 +354,5 @@ if __name__ == "__main__":
     test_routing_and_dispatch()
     test_location_confirmation_and_dropped_call()
     test_telegram_acknowledge_button()
+    test_duplicate_callers()
     print("ALL CHECKS PASSED")

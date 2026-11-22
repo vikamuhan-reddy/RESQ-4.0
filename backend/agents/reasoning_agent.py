@@ -4,13 +4,28 @@ Evaluates structured incident data, assesses information completeness, explains 
 factors, discovers contradictions, identifies candidate duplicate/related incidents,
 and generates actionable recommendations for the human operator.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Set
+from datetime import datetime
 import math
+import re
 
-from backend.models.incident import IncidentRecord, AgentReasoning, TimelineEvent
+from backend.models.incident import IncidentRecord, AgentReasoning, TimelineEvent, LocationRecord
 from backend.models.enums import UrgencyLevel, VerificationStatus, IncidentState
 from backend.core.persistence import db_engine
 from backend.core.orchestrator import orchestrator
+
+DUPLICATE_WINDOW_MIN = 15
+# Words that appear in many places' names, so sharing them says nothing (Tamil-English included)
+GENERIC_PLACE_WORDS = {
+    "chennai", "near", "the", "road", "signal", "junction", "flyover", "bridge", "street", "main", "opposite",
+    "side", "kitta", "area", "market", "station", "bus", "stop", "nagar", "unspecified", "location", "not",
+    "given", "yet", "pending", "incident", "keela", "mela", "pakkathula", "high", "avenue", "cross", "salai",
+}
+
+
+def place_tokens(loc: LocationRecord) -> Set[str]:
+    text = f"{loc.search_query or ''} {loc.description or ''}".lower()
+    return {t for t in re.split(r"[\s,./()\-]+", text) if len(t) >= 3 and t not in GENERIC_PLACE_WORDS}
 
 def haversine_distance_km(lat1, lon1, lat2, lon2) -> float:
     if None in (lat1, lon1, lat2, lon2):
@@ -126,30 +141,35 @@ class IncidentReasoningAgent:
         Scans other incidents for spatial, temporal, and semantic similarity.
         Rule: NEVER auto-merge or auto-reject. Human operator must review.
         """
-        all_incidents = db_engine.list_incidents()
+        if incident.is_merged or incident.locations.incident_location.verification_status == VerificationStatus.MISSING:
+            return []
         candidates = []
-        
-        inc_lat = incident.locations.incident_location.latitude
-        inc_lng = incident.locations.incident_location.longitude
-        
-        for other in all_incidents:
-            if other.incident_id == incident.incident_id:
+        loc = incident.locations.incident_location
+        my_tokens = place_tokens(loc)
+        my_time = datetime.fromisoformat(incident.created_at)
+
+        for other in db_engine.list_incidents():
+            other_loc = other.locations.incident_location
+            if other.incident_id == incident.incident_id or other.is_merged or other_loc.verification_status == VerificationStatus.MISSING:
                 continue
-                
-            dist_km = haversine_distance_km(
-                inc_lat, inc_lng,
-                other.locations.incident_location.latitude,
-                other.locations.incident_location.longitude
-            )
-            
-            # A place match is required; same category alone would flag every accident in the city
+            minutes_apart = abs((datetime.fromisoformat(other.created_at) - my_time).total_seconds()) / 60
+            if minutes_apart > DUPLICATE_WINDOW_MIN:
+                continue
+
+            # Same place is required (confirmed pins close together, or the same distinctive place name);
+            # same category alone would flag every accident in the city
+            dist_km = haversine_distance_km(loc.latitude, loc.longitude, other_loc.latitude, other_loc.longitude)
+            shared = my_tokens & place_tokens(other_loc)
             reasons = []
-            if dist_km <= 2.5:
-                reasons.append(f"Proximity: within {dist_km:.2f} km")
-            elif "bridge" in other.locations.incident_location.description.lower() and "bridge" in incident.locations.incident_location.description.lower():
-                reasons.append("Shared landmark reference ('Bridge')")
-            if reasons and other.category == incident.category:
-                reasons.append(f"Matching category: {incident.category.value}")
+            if dist_km <= 0.5:
+                reasons.append(f"Confirmed pins {dist_km:.2f} km apart")
+            elif shared:
+                reasons.append(f"Same place mentioned ({', '.join(sorted(shared))})")
+            if not reasons:
+                continue
+            reasons.append(f"reported {minutes_apart:.0f} min apart")
+            if other.category == incident.category:
+                reasons.append(f"both {incident.category.value}")
 
             if reasons:
                 candidates.append({
@@ -158,7 +178,7 @@ class IncidentReasoningAgent:
                     "location_description": other.locations.incident_location.description,
                     "created_at": other.created_at,
                     "distance_km": round(dist_km, 2) if dist_km < 9000 else "Unknown",
-                    "similarity_rationale": " & ".join(reasons)
+                    "similarity_rationale": "; ".join(reasons)
                 })
                 
         return candidates

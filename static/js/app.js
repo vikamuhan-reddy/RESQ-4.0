@@ -56,6 +56,17 @@ async function findLocationOnMap() {
     }
 }
 
+async function mergeInto(targetId) {
+    if (!activeIncidentId) return;
+    if (!confirm(`Is this the same emergency as ${targetId}?\nThis report will be merged into it and its pending dispatches cancelled.`)) return;
+    try {
+        await API.post(`/api/incidents/${activeIncidentId}/merge-into`, { target_id: targetId, operator_id: 'Operator-Lead' });
+        await selectIncident(activeIncidentId);
+    } catch (err) {
+        alert('Error merging: ' + err.message);
+    }
+}
+
 async function confirmLocation(lat, lon, label) {
     if (!activeIncidentId) return alert('Select an active incident first.');
     try {
@@ -260,7 +271,7 @@ function renderQueueTable(incidents) {
             <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${connClass}">${esc(inc.connection_state)}</span></td>
             <td class="py-3 px-4 text-xs text-slate-300 max-w-[160px] truncate">${esc(inc.locations.incident_location.description)}</td>
             <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${inc.locations.incident_location.verification_status === 'INDEPENDENTLY_VERIFIED' ? 'badge-verified' : 'badge-uncertain'}">${esc(inc.locations.incident_location.verification_status)}</span></td>
-            <td class="py-3 px-4"><span class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300">${esc(inc.state)}</span></td>
+            <td class="py-3 px-4"><span class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300">${esc(inc.state)}${inc.is_merged ? " · MERGED" : ""}</span></td>
             <td class="py-3 px-4 text-xs text-slate-400 font-mono">${esc(inc.assigned_operator || 'Unassigned')}</td>
         `;
         tbody.appendChild(tr);
@@ -334,7 +345,7 @@ function renderIncidentDetail(inc) {
     renderProvenanceFields(inc.fields);
 
     // Multi-Agent Reasoning Panel
-    renderAgentReasoning(inc.reasoning, inc.follow_up_queue);
+    renderAgentReasoning(inc.reasoning, inc.follow_up_queue, inc);
 
     // Coordination Actions
     renderCoordinationActions(inc.coordination_actions);
@@ -419,7 +430,7 @@ function renderProvenanceFields(fields) {
     });
 }
 
-function renderAgentReasoning(reasoning, followUps) {
+function renderAgentReasoning(reasoning, followUps, inc) {
     const urgencyEl = document.getElementById('reasoning-urgency');
     const compScoreEl = document.getElementById('reasoning-completeness');
     const missingEl = document.getElementById('reasoning-missing');
@@ -451,6 +462,26 @@ function renderAgentReasoning(reasoning, followUps) {
             contraEl.innerHTML = reasoning.contradictions.map(c => `<div class="p-2 rounded bg-amber-950/50 border border-amber-800 text-amber-300 text-xs"><i class="fas fa-triangle-exclamation mr-1"></i> ${esc(c)}</div>`).join('');
         } else {
             contraEl.innerHTML = `<span class="text-slate-500 text-xs italic">No contradictions detected</span>`;
+        }
+    }
+
+    const dupEl = document.getElementById('reasoning-duplicates');
+    if (dupEl) {
+        const candidates = reasoning.related_incident_candidates || [];
+        if (inc && inc.is_merged) {
+            dupEl.innerHTML = `<span class="text-xs text-cyan-300">Merged into ${esc(inc.merged_into_id)}; its pending dispatches were cancelled.</span>`;
+        } else if (candidates.length) {
+            dupEl.innerHTML = candidates.map(c => `
+                <div class="p-2 rounded bg-slate-900 border border-cyan-900 text-xs">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="font-mono text-cyan-300">${esc(c.incident_id)}</span>
+                        <button data-merge="${esc(c.incident_id)}" class="px-2 py-0.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded font-semibold">Same emergency: merge</button>
+                    </div>
+                    <div class="text-slate-400 mt-0.5">${esc(c.location_description)} · ${esc(c.similarity_rationale)}</div>
+                </div>`).join('');
+            dupEl.querySelectorAll('[data-merge]').forEach(b => { b.onclick = () => mergeInto(b.dataset.merge); });
+        } else {
+            dupEl.innerHTML = `<span class="text-slate-500 text-xs italic">None</span>`;
         }
     }
 
