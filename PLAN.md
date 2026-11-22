@@ -151,13 +151,13 @@ On disconnect, propose routing with whatever is known and flag what's missing.
 
 ## 24-hour schedule (solo)
 
-| Hours | Do | Why it's in |
-|---|---|---|
-| 0–2 | 1.1, 1.2, 1.3 | Judges can't break the demo |
-| 2–6 | 2.1 + 2.3 (only the "unknown → Other" fix) | The core: real understanding |
-| 6–9 | 3.1, 3.2, 3.3 | The wow moment: a phone buzzes |
-| 9–10 | 4.1 (delete fake pins, ~10 min) + 5.1 (spoken follow-up) | Safety, and visible "listening" |
-| 10–12 | 6.1 evaluation set, real numbers in README | Answers "how do you know it works?" |
+| Hours | Do | Why it's in | Status |
+|---|---|---|---|
+| 0–2 | 1.1, 1.2, 1.3 | Judges can't break the demo | ✅ done (+1.4) |
+| 2–6 | 2.1 + 2.3 (only the "unknown → Other" fix) | The core: real understanding | ✅ done (+2.2 transcribe ported) |
+| 6–9 | 3.1, 3.2, 3.3 | The wow moment: a phone buzzes | ✅ code done; live Telegram test waits on D3 |
+| 9–10 | 4.1 (delete fake pins, ~10 min) + 5.1 (spoken follow-up) | Safety, and visible "listening" | ✅ done |
+| 10–12 | 6.1 evaluation set, real numbers in README | Answers "how do you know it works?" | ✅ done |
 | 12–14 | Buffer: bugs, then 6.2 timer / 6.4 dropped-call routing if time | Cheap extras after 3.1 |
 | 14–20 | **Sleep** | A tired demo loses |
 | 20–24 | Phase 7: seed script, rehearse ×3, backup video, slides | The demo is what gets judged |
