@@ -28,6 +28,7 @@ from backend.models.enums import (
     IncidentState
 )
 from backend.core.persistence import db_engine
+from backend.core.orchestrator import orchestrator
 
 # ── Keyword fallbacks ────────────────────────────────────────────────────────
 
@@ -134,7 +135,7 @@ class VoiceIntelligenceAgent:
         self._generate_adaptive_follow_up(incident, language)
 
         if incident.state == IncidentState.RECEIVED:
-            incident.state = IncidentState.INFORMATION_GATHERING
+            orchestrator.advance(incident, IncidentState.INFORMATION_GATHERING, "Voice Intelligence Agent", "First caller statement processed")
 
         db_engine.save_incident(incident)
 

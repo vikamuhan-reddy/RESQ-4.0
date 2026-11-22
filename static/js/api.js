@@ -1,13 +1,22 @@
 /**
  * RESQ 4.0 API Client & Real-time EventSource (SSE) Listener
  */
+
+// Escape caller/AI/operator text before putting it into innerHTML templates
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function failWithDetail(res) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `HTTP error ${res.status}`);
+}
+
 const API = {
     baseUrl: '',
 
     async get(endpoint) {
         try {
             const res = await fetch(`${this.baseUrl}${endpoint}`);
-            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            if (!res.ok) await failWithDetail(res);
             return await res.json();
         } catch (err) {
             console.error(`API GET ${endpoint} error:`, err);
@@ -22,7 +31,7 @@ const API = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            if (!res.ok) await failWithDetail(res);
             return await res.json();
         } catch (err) {
             console.error(`API POST ${endpoint} error:`, err);

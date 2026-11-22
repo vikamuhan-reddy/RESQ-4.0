@@ -137,6 +137,12 @@ function switchTab(tabId) {
         const el = document.getElementById(id);
         if (el) el.classList.toggle('hidden', id !== `tab-${tabId}`);
     });
+
+    // Leaflet sizes itself to 0x0 while the tab is hidden; re-measure and re-fit once visible
+    if (tabId === 'detail' && mapController.map) {
+        mapController.map.invalidateSize();
+        if (activeIncidentId) selectIncident(activeIncidentId);
+    }
 }
 
 // ----------------- Real-time Event Handler -----------------
@@ -186,14 +192,14 @@ function renderQueueTable(incidents) {
         const connClass = inc.connection_state === 'DISCONNECTED' ? 'badge-disconnected font-bold' : 'text-emerald-400';
 
         tr.innerHTML = `
-            <td class="py-3 px-4 font-mono font-bold text-xs text-cyan-400">${inc.incident_id}</td>
-            <td class="py-3 px-4 font-semibold text-sm text-slate-200">${inc.category}</td>
-            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${urgencyClass}">${inc.urgency}</span></td>
-            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${connClass}">${inc.connection_state}</span></td>
-            <td class="py-3 px-4 text-xs text-slate-300 max-w-[160px] truncate">${inc.locations.incident_location.description}</td>
-            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${inc.locations.incident_location.verification_status === 'UNCERTAIN' ? 'badge-uncertain' : 'badge-verified'}">${inc.locations.incident_location.verification_status}</span></td>
-            <td class="py-3 px-4"><span class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300">${inc.state}</span></td>
-            <td class="py-3 px-4 text-xs text-slate-400 font-mono">${inc.assigned_operator || 'Unassigned'}</td>
+            <td class="py-3 px-4 font-mono font-bold text-xs text-cyan-400">${esc(inc.incident_id)}</td>
+            <td class="py-3 px-4 font-semibold text-sm text-slate-200">${esc(inc.category)}</td>
+            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${urgencyClass}">${esc(inc.urgency)}</span></td>
+            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${connClass}">${esc(inc.connection_state)}</span></td>
+            <td class="py-3 px-4 text-xs text-slate-300 max-w-[160px] truncate">${esc(inc.locations.incident_location.description)}</td>
+            <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-xs ${inc.locations.incident_location.verification_status === 'INDEPENDENTLY_VERIFIED' ? 'badge-verified' : 'badge-uncertain'}">${esc(inc.locations.incident_location.verification_status)}</span></td>
+            <td class="py-3 px-4"><span class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 border border-slate-700 text-slate-300">${esc(inc.state)}</span></td>
+            <td class="py-3 px-4 text-xs text-slate-400 font-mono">${esc(inc.assigned_operator || 'Unassigned')}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -247,7 +253,7 @@ function renderIncidentDetail(inc) {
     if (incLocEl) incLocEl.innerText = incidentLoc.description || 'Not specified';
     if (incLocStatus) {
         incLocStatus.innerText = incidentLoc.verification_status;
-        incLocStatus.className = incidentLoc.verification_status === 'UNCERTAIN' ? 'px-2 py-0.5 rounded text-xs font-semibold badge-uncertain' : 'px-2 py-0.5 rounded text-xs font-semibold badge-verified';
+        incLocStatus.className = incidentLoc.verification_status === 'INDEPENDENTLY_VERIFIED' ? 'px-2 py-0.5 rounded text-xs font-semibold badge-verified' : 'px-2 py-0.5 rounded text-xs font-semibold badge-uncertain';
     }
     if (incLocPrec) incLocPrec.innerText = incidentLoc.precision;
 
@@ -370,7 +376,7 @@ function renderAgentReasoning(reasoning, followUps) {
 
     if (missingEl) {
         if (reasoning.missing_critical_fields && reasoning.missing_critical_fields.length > 0) {
-            missingEl.innerHTML = reasoning.missing_critical_fields.map(m => `<span class="px-2 py-1 rounded bg-red-950/60 border border-red-800/60 text-red-300 text-xs flex items-center gap-1"><i class="fas fa-exclamation-circle"></i> ${m}</span>`).join('');
+            missingEl.innerHTML = reasoning.missing_critical_fields.map(m => `<span class="px-2 py-1 rounded bg-red-950/60 border border-red-800/60 text-red-300 text-xs flex items-center gap-1"><i class="fas fa-exclamation-circle"></i> ${esc(m)}</span>`).join('');
         } else {
             missingEl.innerHTML = `<span class="text-emerald-400 text-xs"><i class="fas fa-check-circle"></i> No critical fields missing</span>`;
         }
@@ -378,7 +384,7 @@ function renderAgentReasoning(reasoning, followUps) {
 
     if (contraEl) {
         if (reasoning.contradictions && reasoning.contradictions.length > 0) {
-            contraEl.innerHTML = reasoning.contradictions.map(c => `<div class="p-2 rounded bg-amber-950/50 border border-amber-800 text-amber-300 text-xs"><i class="fas fa-triangle-exclamation mr-1"></i> ${c}</div>`).join('');
+            contraEl.innerHTML = reasoning.contradictions.map(c => `<div class="p-2 rounded bg-amber-950/50 border border-amber-800 text-amber-300 text-xs"><i class="fas fa-triangle-exclamation mr-1"></i> ${esc(c)}</div>`).join('');
         } else {
             contraEl.innerHTML = `<span class="text-slate-500 text-xs italic">No contradictions detected</span>`;
         }
@@ -386,7 +392,7 @@ function renderAgentReasoning(reasoning, followUps) {
 
     if (recsEl) {
         if (reasoning.operator_action_recommendations && reasoning.operator_action_recommendations.length > 0) {
-            recsEl.innerHTML = reasoning.operator_action_recommendations.map(r => `<li class="text-xs text-slate-300">${r}</li>`).join('');
+            recsEl.innerHTML = reasoning.operator_action_recommendations.map(r => `<li class="text-xs text-slate-300">${esc(r)}</li>`).join('');
         } else {
             recsEl.innerHTML = `<li class="text-xs text-slate-500">None</li>`;
         }
@@ -420,7 +426,7 @@ function renderCoordinationActions(actions) {
     list.appendChild(simNotice);
 
     if (!actions || actions.length === 0) {
-        list.innerHTML = `<div class="text-slate-500 text-xs py-3 italic">No coordination actions dispatched yet. Operators can propose below.</div>`;
+        list.insertAdjacentHTML('beforeend', `<div class="text-slate-500 text-xs py-3 italic">No coordination actions dispatched yet. Operators can propose below.</div>`);
         return;
     }
 
@@ -433,14 +439,14 @@ function renderCoordinationActions(actions) {
 
         item.innerHTML = `
             <div class="flex items-center justify-between">
-                <span class="font-bold text-xs text-slate-200">${a.action_type}</span>
-                <span class="px-2 py-0.5 rounded text-xs font-semibold ${statusBadge}">${a.status}</span>
+                <span class="font-bold text-xs text-slate-200">${esc(a.action_type)}</span>
+                <span class="px-2 py-0.5 rounded text-xs font-semibold ${statusBadge}">${esc(a.status)}</span>
             </div>
-            <div class="text-xs text-slate-400">Target Agency: <strong class="text-slate-200">${a.target_agency}</strong></div>
-            <div class="text-xs text-slate-500 font-mono">Key: ${a.idempotency_key}</div>
-            
+            <div class="text-xs text-slate-400">Target Agency: <strong class="text-slate-200">${esc(a.target_agency)}</strong></div>
+            <div class="text-xs text-slate-500 font-mono">Key: ${esc(a.idempotency_key)}</div>
+
             <div class="flex items-center justify-between pt-2 border-t border-slate-800">
-                <span class="text-xs text-slate-400">Human Approval: <strong>${isApproved ? 'Approved by ' + a.operator_id : 'PENDING'}</strong></span>
+                <span class="text-xs text-slate-400">Human Approval: <strong>${isApproved ? 'Approved by ' + esc(a.operator_id) : 'PENDING'}</strong></span>
                 <div class="flex gap-2">
                     ${!isApproved ? `<button onclick="approveAction('${a.action_id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">Authorize Dispatch</button>` : ''}
                     ${isApproved && a.status === 'SENT' ? `<button onclick="simulateAgencyAck('${a.action_id}')" class="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-semibold">Simulate ACK</button>` : ''}
@@ -475,10 +481,10 @@ async function loadTimeline(incident_id) {
                 ${icon}
                 <div class="flex-1">
                     <div class="flex items-center justify-between">
-                        <strong class="text-slate-200">${evt.actor}</strong>
+                        <strong class="text-slate-200">${esc(evt.actor)}</strong>
                         <span class="text-slate-500 font-mono text-[10px]">${timeStr}</span>
                     </div>
-                    <div class="text-slate-300 mt-0.5">${evt.summary}</div>
+                    <div class="text-slate-300 mt-0.5">${esc(evt.summary)}</div>
                 </div>
             `;
             container.appendChild(row);

@@ -10,6 +10,7 @@ from backend.models.incident import IncidentRecord, CoordinationAction
 from backend.models.enums import IncidentCategory, IncidentState
 from backend.core.persistence import db_engine
 from backend.core.idempotency import idempotency_mgr
+from backend.core.orchestrator import orchestrator, Conflict, CLOSED_STATES
 
 class CoordinationAgent:
     def recommend_actions(self, incident: IncidentRecord) -> List[Dict[str, Any]]:
@@ -62,6 +63,9 @@ class CoordinationAgent:
         Creates a proposed coordination action with idempotency enforcement.
         Note: The action remains in CREATED status until authorized by an operator.
         """
+        if incident.state in CLOSED_STATES:
+            raise Conflict(f"Incident {incident.incident_id} is {incident.state.value}; cannot propose dispatch")
+
         # Generate stable idempotency key if not provided
         idemp_key = custom_idempotency_key or f"IDEMP-{incident.incident_id}-{action_type}"
         
@@ -85,9 +89,9 @@ class CoordinationAgent:
         # If new action, attach to incident
         if not is_dup:
             incident.coordination_actions.append(action)
-            # Advance incident state to ESCALATION_PENDING if currently in OPERATOR_REVIEW or VALIDATION
-            if incident.state in [IncidentState.VALIDATION, IncidentState.OPERATOR_REVIEW]:
-                incident.state = IncidentState.ESCALATION_PENDING
+            # Never moves an already-escalated incident backwards
+            if orchestrator.can_advance(incident, IncidentState.ESCALATION_PENDING):
+                orchestrator.advance(incident, IncidentState.ESCALATION_PENDING, "Coordination Agent", f"Proposed {action_type}")
             db_engine.save_incident(incident)
             
         return action

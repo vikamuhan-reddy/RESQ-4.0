@@ -8,15 +8,26 @@ import tempfile
 
 # Must be set before backend modules are imported (persistence reads it at import time)
 os.environ["RESQ_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
-os.environ.pop("GEMINI_API_KEY", None)  # keyword path only, so results are deterministic
+# Keyword path only, so results are deterministic. Empty (not unset) so load_dotenv() won't refill it from .env
+os.environ["GEMINI_API_KEY"] = ""
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.core.orchestrator import orchestrator
+from fastapi.testclient import TestClient
+from backend.main import app
+from backend.core.orchestrator import orchestrator, Conflict, NotFound
 from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
 from backend.core.persistence import PersistenceEngine
 from backend.models.enums import IncidentState, VerificationStatus, ConnectionState
+
+
+def assert_raises(exc, fn, *args):
+    try:
+        fn(*args)
+    except exc:
+        return
+    raise AssertionError(f"{fn.__name__} did not raise {exc.__name__}")
 
 
 def test_full_pipeline():
@@ -64,8 +75,39 @@ def test_full_pipeline():
     assert restored.fields["reported_injuries"].current_value == "Three people injured (one critical)"
     assert restored.connection_state == ConnectionState.DISCONNECTED
 
-    print("ALL CHECKS PASSED")
+
+
+def test_guards():
+    print(">>> 7. Dispatch needs approval; no double approval; no going backwards...")
+    inc = orchestrator.create_incident("Fire Hazard", "en")
+    fire = coordination_agent.create_action_proposal(inc, "NOTIFY_FIRE_RESCUE", "Fire 101")
+    assert inc.state == IncidentState.ESCALATION_PENDING
+    assert_raises(Conflict, orchestrator.simulate_agency_acknowledgment, inc.incident_id, fire.action_id)
+    orchestrator.operator_approve_action(inc.incident_id, fire.action_id, "Op")
+    assert_raises(Conflict, orchestrator.operator_approve_action, inc.incident_id, fire.action_id, "Op")
+    orchestrator.simulate_agency_acknowledgment(inc.incident_id, fire.action_id, "FIRE-1")
+    ems = coordination_agent.create_action_proposal(inc, "DISPATCH_EMS", "Ambulance 108")
+    orchestrator.operator_approve_action(inc.incident_id, ems.action_id, "Op")
+    assert orchestrator.get_incident(inc.incident_id).state == IncidentState.ACKNOWLEDGED
+
+    print(">>> 8. Closed incidents can't dispatch; unknown IDs are NotFound...")
+    closed = orchestrator.create_incident()
+    late = coordination_agent.create_action_proposal(closed, "DISPATCH_EMS", "Ambulance 108")
+    closed.state = IncidentState.CLOSED  # no close endpoint yet
+    assert_raises(Conflict, orchestrator.operator_approve_action, closed.incident_id, late.action_id, "Op")
+    assert_raises(Conflict, coordination_agent.create_action_proposal, closed, "DISPATCH_EMS", "Ambulance 108")
+    assert_raises(NotFound, orchestrator.get_incident, "NOPE")
+
+    print(">>> 9. API returns 404/409 and reads operator_id from the body...")
+    c = TestClient(app)
+    assert c.post("/api/incidents/NOPE/disconnect", json={}).status_code == 404
+    inc2 = orchestrator.create_incident()
+    a2 = coordination_agent.create_action_proposal(inc2, "DISPATCH_EMS", "Ambulance 108")
+    assert c.post(f"/api/incidents/{inc2.incident_id}/simulate-ack", json={"action_id": a2.action_id}).status_code == 409
+    assert c.post(f"/api/incidents/{inc2.incident_id}/acknowledge", json={"operator_id": "Operator-Lead"}).json()["assigned_operator"] == "Operator-Lead"
 
 
 if __name__ == "__main__":
     test_full_pipeline()
+    test_guards()
+    print("ALL CHECKS PASSED")

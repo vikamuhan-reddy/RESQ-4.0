@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.core.persistence import db_engine
-from backend.core.orchestrator import orchestrator
+from backend.core.orchestrator import orchestrator, NotFound, Conflict
 from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
@@ -31,6 +31,14 @@ app = FastAPI(
     description="Failure-Aware Agentic Emergency Intelligence & Incident Continuity Platform",
     version="4.0.0"
 )
+
+@app.exception_handler(NotFound)
+async def _not_found(_: Request, exc: NotFound):
+    return JSONResponse({"detail": str(exc)}, status_code=404)
+
+@app.exception_handler(Conflict)
+async def _conflict(_: Request, exc: Conflict):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
 
 import os as _os
 _ALLOWED_ORIGINS = [o.strip() for o in _os.getenv(
@@ -89,6 +97,9 @@ class ProposeActionRequest(BaseModel):
 
 class ApproveActionRequest(BaseModel):
     action_id: str
+    operator_id: str = "Operator-1"
+
+class AcknowledgeRequest(BaseModel):
     operator_id: str = "Operator-1"
 
 class AgencyAckRequest(BaseModel):
@@ -224,8 +235,8 @@ async def simulate_disconnect(incident_id: str, req: DisconnectRequest):
     return inc
 
 @app.post("/api/incidents/{incident_id}/acknowledge")
-async def operator_acknowledge(incident_id: str, operator_id: str = "Operator-1"):
-    inc = orchestrator.operator_acknowledge(incident_id, operator_id)
+async def operator_acknowledge(incident_id: str, req: AcknowledgeRequest = AcknowledgeRequest()):
+    inc = orchestrator.operator_acknowledge(incident_id, req.operator_id)
     await broadcast_event("OPERATOR_ACKNOWLEDGED", inc.model_dump())
     return inc
 

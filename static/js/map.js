@@ -55,9 +55,9 @@ class IncidentMapController {
             this.callerMarker.bindPopup(`
                 <div style="color: #0f172a; font-family: sans-serif; font-size: 12px;">
                     <strong style="color: #0891b2;">CALLER LOCATION</strong><br>
-                    <strong>Desc:</strong> ${caller.description}<br>
-                    <strong>Status:</strong> ${caller.verification_status}<br>
-                    <strong>Precision:</strong> ${caller.precision}
+                    <strong>Desc:</strong> ${esc(caller.description)}<br>
+                    <strong>Status:</strong> ${esc(caller.verification_status)}<br>
+                    <strong>Precision:</strong> ${esc(caller.precision)}
                 </div>
             `);
             bounds.push([caller.latitude, caller.longitude]);
@@ -78,9 +78,9 @@ class IncidentMapController {
             this.incidentMarker.bindPopup(`
                 <div style="color: #0f172a; font-family: sans-serif; font-size: 12px;">
                     <strong style="color: ${color};">INCIDENT LOCATION</strong><br>
-                    <strong>Desc:</strong> ${incident.description}<br>
-                    <strong>Status:</strong> ${incident.verification_status}<br>
-                    <strong>Precision:</strong> ${incident.precision}
+                    <strong>Desc:</strong> ${esc(incident.description)}<br>
+                    <strong>Status:</strong> ${esc(incident.verification_status)}<br>
+                    <strong>Precision:</strong> ${esc(incident.precision)}
                 </div>
             `);
             bounds.push([incident.latitude, incident.longitude]);

@@ -23,10 +23,18 @@ from backend.models.enums import (
 )
 from backend.core.persistence import db_engine
 
+class NotFound(Exception):
+    """Maps to HTTP 404."""
+
+class Conflict(Exception):
+    """Maps to HTTP 409: the request is illegal in the current state."""
+
+CLOSED_STATES = (IncidentState.RESOLUTION_REVIEW, IncidentState.CLOSED)
+
 # Valid allowed state transitions
 VALID_TRANSITIONS: Dict[IncidentState, List[IncidentState]] = {
-    IncidentState.RECEIVED: [IncidentState.INFORMATION_GATHERING, IncidentState.OPERATOR_REVIEW],
-    IncidentState.INFORMATION_GATHERING: [IncidentState.VALIDATION, IncidentState.OPERATOR_REVIEW],
+    IncidentState.RECEIVED: [IncidentState.INFORMATION_GATHERING, IncidentState.OPERATOR_REVIEW, IncidentState.ESCALATION_PENDING],
+    IncidentState.INFORMATION_GATHERING: [IncidentState.VALIDATION, IncidentState.OPERATOR_REVIEW, IncidentState.ESCALATION_PENDING],
     IncidentState.VALIDATION: [IncidentState.OPERATOR_REVIEW, IncidentState.ESCALATION_PENDING],
     IncidentState.OPERATOR_REVIEW: [IncidentState.ESCALATION_PENDING, IncidentState.ESCALATION_SENT, IncidentState.RESOLUTION_REVIEW, IncidentState.CLOSED],
     IncidentState.ESCALATION_PENDING: [IncidentState.ESCALATION_SENT, IncidentState.OPERATOR_REVIEW],
@@ -58,39 +66,37 @@ class OrchestrationEngine:
         db_engine.log_event(evt)
         return incident
 
-    def transition_state(self, incident_id: str, new_state: IncidentState, actor: str, reason: str) -> IncidentRecord:
+    def get_incident(self, incident_id: str) -> IncidentRecord:
         incident = db_engine.get_incident(incident_id)
         if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
-        
-        current_state = incident.state
-        allowed_targets = VALID_TRANSITIONS.get(current_state, [])
-        
-        if new_state not in allowed_targets and new_state != current_state:
-            raise ValueError(f"Illegal state transition from {current_state.value} to {new_state.value}. Allowed: {[s.value for s in allowed_targets]}")
-        
+            raise NotFound(f"Incident {incident_id} not found")
+        return incident
+
+    def can_advance(self, incident: IncidentRecord, new_state: IncidentState) -> bool:
+        return new_state in VALID_TRANSITIONS.get(incident.state, [])
+
+    def advance(self, incident: IncidentRecord, new_state: IncidentState, actor: str, reason: str) -> None:
+        """The only place incident.state changes. Logs the change; the caller saves the incident."""
+        if incident.state == new_state:
+            return
+        if not self.can_advance(incident, new_state):
+            raise Conflict(f"Illegal state transition {incident.state.value} -> {new_state.value}")
+        old = incident.state
         incident.state = new_state
-        incident.updated_at = datetime.utcnow().isoformat()
-        db_engine.save_incident(incident)
-        
-        evt = TimelineEvent(
-            incident_id=incident_id,
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident.incident_id,
             event_type="STATE_CHANGE",
             actor=actor,
-            summary=f"Incident state transitioned from {current_state.value} to {new_state.value}",
-            details={"from_state": current_state.value, "to_state": new_state.value, "reason": reason}
-        )
-        db_engine.log_event(evt)
-        return incident
+            summary=f"State {old.value} -> {new_state.value}: {reason}",
+            details={"from_state": old.value, "to_state": new_state.value, "reason": reason}
+        ))
 
     def handle_caller_disconnection(self, incident_id: str, reason: str = "Abrupt line termination detected") -> IncidentRecord:
         """
         Core Innovation: A communication failure is an incident event, NEVER an incident termination.
         Persists available data, marks interruption, alerts human operator.
         """
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         incident.connection_state = ConnectionState.DISCONNECTED
         
@@ -102,7 +108,7 @@ class OrchestrationEngine:
         
         # Safely transition to OPERATOR_REVIEW so human operator has immediate review control
         if incident.state in [IncidentState.RECEIVED, IncidentState.INFORMATION_GATHERING, IncidentState.VALIDATION, IncidentState.ESCALATION_PENDING]:
-            incident.state = IncidentState.OPERATOR_REVIEW
+            self.advance(incident, IncidentState.OPERATOR_REVIEW, "Continuity Engine (Disconnection Handler)", reason)
             
         db_engine.save_incident(incident)
         
@@ -121,13 +127,12 @@ class OrchestrationEngine:
         """
         Gracefully absorbs AI timeouts or crashes without terminating incident.
         """
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         incident.reasoning.uncertain_fields.append(f"AI Service Failure ({agent_name})")
         incident.reasoning.operator_action_recommendations.append(f"Manual operator verification needed due to {agent_name} failure.")
-        incident.state = IncidentState.OPERATOR_REVIEW
+        if self.can_advance(incident, IncidentState.OPERATOR_REVIEW):
+            self.advance(incident, IncidentState.OPERATOR_REVIEW, "Continuity Engine (Agent Watchdog)", f"{agent_name} failed")
         db_engine.save_incident(incident)
         
         evt = TimelineEvent(
@@ -152,9 +157,7 @@ class OrchestrationEngine:
         """
         Allows human operator to correct or verify extracted information with full audit provenance.
         """
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         now = datetime.utcnow().isoformat()
         
@@ -198,14 +201,12 @@ class OrchestrationEngine:
         return incident
 
     def operator_acknowledge(self, incident_id: str, operator_id: str = "Operator-1") -> IncidentRecord:
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         incident.operator_acknowledged = True
         incident.assigned_operator = operator_id
-        if incident.state == IncidentState.RECEIVED or incident.state == IncidentState.VALIDATION:
-            incident.state = IncidentState.OPERATOR_REVIEW
+        if incident.state in (IncidentState.RECEIVED, IncidentState.VALIDATION):
+            self.advance(incident, IncidentState.OPERATOR_REVIEW, operator_id, "Operator acknowledged")
             
         db_engine.save_incident(incident)
         
@@ -223,9 +224,7 @@ class OrchestrationEngine:
         """
         Enforces human authorization for consequential coordination actions.
         """
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         target_action = None
         for act in incident.coordination_actions:
@@ -234,16 +233,21 @@ class OrchestrationEngine:
                 break
                 
         if not target_action:
-            raise ValueError(f"Action {action_id} not found on incident {incident_id}")
-            
+            raise NotFound(f"Action {action_id} not found on incident {incident_id}")
+        if incident.state in CLOSED_STATES:
+            raise Conflict(f"Incident {incident_id} is {incident.state.value}; cannot dispatch")
+        if target_action.status != ActionStatus.CREATED:
+            raise Conflict(f"Action {action_id} is already {target_action.status.value}")
+
         now = datetime.utcnow().isoformat()
         target_action.operator_approved = True
         target_action.operator_id = operator_id
         target_action.status = ActionStatus.SENT
         target_action.transmitted_at = now
-        
-        # Advance incident state to ESCALATION_SENT if appropriate
-        incident.state = IncidentState.ESCALATION_SENT
+
+        # A second department's approval must not move the incident backwards
+        if self.can_advance(incident, IncidentState.ESCALATION_SENT):
+            self.advance(incident, IncidentState.ESCALATION_SENT, operator_id, f"Approved {target_action.action_type}")
         db_engine.save_incident(incident)
         db_engine.save_action(target_action)
         
@@ -265,18 +269,19 @@ class OrchestrationEngine:
         """
         Simulates agency response lifecycle: SENT -> ACKNOWLEDGED -> ASSIGNED
         """
-        incident = db_engine.get_incident(incident_id)
-        if not incident:
-            raise ValueError(f"Incident {incident_id} not found")
+        incident = self.get_incident(incident_id)
         
         for act in incident.coordination_actions:
             if act.action_id == action_id:
+                if not act.operator_approved or act.status != ActionStatus.SENT:
+                    raise Conflict(f"Action {action_id} must be operator-approved and SENT before an agency can acknowledge it (status: {act.status.value})")
                 now = datetime.utcnow().isoformat()
                 act.status = ActionStatus.ACKNOWLEDGED
                 act.acknowledged_at = now
                 act.acknowledgment_reference = responder_ref
-                
-                incident.state = IncidentState.ACKNOWLEDGED
+
+                if self.can_advance(incident, IncidentState.ACKNOWLEDGED):
+                    self.advance(incident, IncidentState.ACKNOWLEDGED, act.target_agency, f"ACK ref {responder_ref}")
                 db_engine.save_incident(incident)
                 db_engine.save_action(act)
                 
@@ -290,6 +295,6 @@ class OrchestrationEngine:
                 db_engine.log_event(evt)
                 return act
                 
-        raise ValueError(f"Action {action_id} not found")
+        raise NotFound(f"Action {action_id} not found on incident {incident_id}")
 
 orchestrator = OrchestrationEngine()

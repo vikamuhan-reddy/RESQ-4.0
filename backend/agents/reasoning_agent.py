@@ -10,6 +10,7 @@ import math
 from backend.models.incident import IncidentRecord, AgentReasoning, TimelineEvent
 from backend.models.enums import UrgencyLevel, VerificationStatus, IncidentState
 from backend.core.persistence import db_engine
+from backend.core.orchestrator import orchestrator
 
 def haversine_distance_km(lat1, lon1, lat2, lon2) -> float:
     if None in (lat1, lon1, lat2, lon2):
@@ -101,7 +102,7 @@ class IncidentReasoningAgent:
         
         # Advance state to VALIDATION if currently INFORMATION_GATHERING
         if incident.state == IncidentState.INFORMATION_GATHERING:
-            incident.state = IncidentState.VALIDATION
+            orchestrator.advance(incident, IncidentState.VALIDATION, "Incident Reasoning Agent", "Initial assessment complete")
             
         db_engine.save_incident(incident)
         
