@@ -22,6 +22,7 @@ from backend.models.enums import (
     IncidentCategory
 )
 from backend.core.persistence import db_engine
+from backend.services import dispatch_service
 
 class NotFound(Exception):
     """Maps to HTTP 404."""
@@ -220,50 +221,73 @@ class OrchestrationEngine:
         db_engine.log_event(evt)
         return incident
 
-    def operator_approve_action(self, incident_id: str, action_id: str, operator_id: str = "Operator-1") -> CoordinationAction:
-        """
-        Enforces human authorization for consequential coordination actions.
-        """
-        incident = self.get_incident(incident_id)
-        
-        target_action = None
+    def _find_action(self, incident: IncidentRecord, action_id: str) -> CoordinationAction:
         for act in incident.coordination_actions:
             if act.action_id == action_id:
-                target_action = act
-                break
-                
-        if not target_action:
-            raise NotFound(f"Action {action_id} not found on incident {incident_id}")
+                return act
+        raise NotFound(f"Action {action_id} not found on incident {incident.incident_id}")
+
+    def operator_approve_action(self, incident_id: str, action_id: str, operator_id: str = "Operator-1") -> CoordinationAction:
+        """
+        Human authorization. Marks the action QUEUED; it only becomes SENT once delivery succeeds.
+        A FAILED action can be approved again (retry).
+        """
+        incident = self.get_incident(incident_id)
+        target_action = self._find_action(incident, action_id)
         if incident.state in CLOSED_STATES:
             raise Conflict(f"Incident {incident_id} is {incident.state.value}; cannot dispatch")
-        if target_action.status != ActionStatus.CREATED:
+        if target_action.status not in (ActionStatus.CREATED, ActionStatus.FAILED):
             raise Conflict(f"Action {action_id} is already {target_action.status.value}")
 
-        now = datetime.utcnow().isoformat()
+        if target_action.status == ActionStatus.FAILED:
+            target_action.retry_count += 1
         target_action.operator_approved = True
         target_action.operator_id = operator_id
-        target_action.status = ActionStatus.SENT
-        target_action.transmitted_at = now
-
-        # A second department's approval must not move the incident backwards
-        if self.can_advance(incident, IncidentState.ESCALATION_SENT):
-            self.advance(incident, IncidentState.ESCALATION_SENT, operator_id, f"Approved {target_action.action_type}")
+        target_action.status = ActionStatus.QUEUED
         db_engine.save_incident(incident)
         db_engine.save_action(target_action)
-        
-        evt = TimelineEvent(
+
+        db_engine.log_event(TimelineEvent(
             incident_id=incident_id,
             event_type="COORDINATION_APPROVED",
             actor=operator_id,
             summary=f"Operator approved dispatch of '{target_action.action_type}' to '{target_action.target_agency}'",
-            details={
-                "action_id": target_action.action_id,
-                "agency": target_action.target_agency,
-                "transmitted_at": now
-            }
-        )
-        db_engine.log_event(evt)
+            details={"action_id": target_action.action_id, "agency": target_action.target_agency, "attempt": target_action.retry_count + 1}
+        ))
         return target_action
+
+    def record_delivery(self, incident_id: str, action_id: str, delivered: bool, note: str) -> CoordinationAction:
+        """The system never assumes a dispatch went out: SENT only on confirmed delivery, otherwise FAILED."""
+        incident = self.get_incident(incident_id)
+        act = self._find_action(incident, action_id)
+        act.delivery_note = note
+        if delivered:
+            act.status = ActionStatus.SENT
+            act.transmitted_at = datetime.utcnow().isoformat()
+            # A second department's dispatch must not move the incident backwards
+            if self.can_advance(incident, IncidentState.ESCALATION_SENT):
+                self.advance(incident, IncidentState.ESCALATION_SENT, act.operator_id or "Operator", f"Dispatched {act.action_type}")
+        else:
+            act.status = ActionStatus.FAILED
+            incident.reasoning.operator_action_recommendations.append(
+                f"Dispatch to {act.target_agency} failed ({note}). Retry or call the department directly."
+            )
+        db_engine.save_incident(incident)
+        db_engine.save_action(act)
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident_id,
+            event_type="DISPATCH_DELIVERED" if delivered else "DISPATCH_FAILED",
+            actor="Dispatch Service",
+            summary=f"{act.target_agency}: {note}",
+            details={"action_id": act.action_id, "delivered": delivered},
+            is_failure_event=not delivered
+        ))
+        return act
+
+    async def approve_and_dispatch(self, incident_id: str, action_id: str, operator_id: str = "Operator-1") -> CoordinationAction:
+        action = self.operator_approve_action(incident_id, action_id, operator_id)
+        delivered, note = await dispatch_service.deliver(self.get_incident(incident_id), action)
+        return self.record_delivery(incident_id, action_id, delivered, note)
 
     def simulate_agency_acknowledgment(self, incident_id: str, action_id: str, responder_ref: str = "DISPATCH-UNIT-704") -> CoordinationAction:
         """

@@ -198,7 +198,10 @@ async def process_voice_intake(incident_id: str, req: VoiceIntakeRequest):
     
     # Run Incident Reasoning Agent
     inc = reasoning_agent.evaluate_incident(inc)
-    
+
+    # Route by rules; proposals wait for operator approval
+    coordination_agent.auto_propose(inc)
+
     await broadcast_event("INCIDENT_UPDATED", inc.model_dump())
     return inc
 
@@ -244,11 +247,7 @@ async def propose_coordination_action(incident_id: str, req: ProposeActionReques
 
 @app.post("/api/incidents/{incident_id}/approve-action")
 async def approve_coordination_action(incident_id: str, req: ApproveActionRequest):
-    action = orchestrator.operator_approve_action(
-        incident_id=incident_id,
-        action_id=req.action_id,
-        operator_id=req.operator_id
-    )
+    action = await orchestrator.approve_and_dispatch(incident_id, req.action_id, req.operator_id)
     # Tag simulation mode on the action
     action.is_simulation = (DISPATCH_MODE != "live")
     action.dispatch_mode = DISPATCH_MODE
@@ -316,6 +315,6 @@ async def startup_event():
             language="ta"
         )
         inc = reasoning_agent.evaluate_incident(inc)
-        coordination_agent.create_action_proposal(inc, "DISPATCH_EMS", "Emergency Medical Services (108)")
+        coordination_agent.auto_propose(inc)
         orchestrator.operator_acknowledge(inc.incident_id, "Operator-Lead-Priya")
         print(f"RESQ 4.0 Initialized with Seed Incident: {inc.incident_id}")

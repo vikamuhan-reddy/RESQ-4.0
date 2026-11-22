@@ -83,6 +83,7 @@ class CoordinationAction(BaseModel):
     operator_approved: bool = False
     operator_id: Optional[str] = None
     acknowledgment_reference: Optional[str] = None
+    delivery_note: Optional[str] = None  # what happened when we tried to deliver it (shown to the operator)
     is_simulation: bool = True  # Always True until real dispatch integration is wired
     dispatch_mode: str = "simulation"  # "simulation" | "live"
 

@@ -11,8 +11,12 @@ import tempfile
 os.environ["RESQ_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 # Keyword path only, so results are deterministic. Empty (not unset) so load_dotenv() won't refill it from .env
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["TELEGRAM_BOT_TOKEN"] = ""  # never message real Telegram groups from tests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import json
+import types
+import httpx
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.core.orchestrator import orchestrator, Conflict, NotFound
@@ -20,8 +24,10 @@ from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
 from backend.core.persistence import PersistenceEngine, db_engine
-from backend.models.enums import IncidentState, VerificationStatus, ConnectionState
+from backend.models.enums import IncidentState, VerificationStatus, ConnectionState, ActionStatus, IncidentCategory
+from backend.models.incident import IncidentRecord, FieldProvenance
 from backend.services.gemini_service import Extraction
+from backend.services import dispatch_service
 import backend.agents.voice_agent as voice_agent_module
 
 
@@ -86,11 +92,11 @@ def test_guards():
     fire = coordination_agent.create_action_proposal(inc, "NOTIFY_FIRE_RESCUE", "Fire 101")
     assert inc.state == IncidentState.ESCALATION_PENDING
     assert_raises(Conflict, orchestrator.simulate_agency_acknowledgment, inc.incident_id, fire.action_id)
-    orchestrator.operator_approve_action(inc.incident_id, fire.action_id, "Op")
+    asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, fire.action_id, "Op"))
     assert_raises(Conflict, orchestrator.operator_approve_action, inc.incident_id, fire.action_id, "Op")
     orchestrator.simulate_agency_acknowledgment(inc.incident_id, fire.action_id, "FIRE-1")
     ems = coordination_agent.create_action_proposal(inc, "DISPATCH_EMS", "Ambulance 108")
-    orchestrator.operator_approve_action(inc.incident_id, ems.action_id, "Op")
+    asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, ems.action_id, "Op"))
     assert orchestrator.get_incident(inc.incident_id).state == IncidentState.ACKNOWLEDGED
 
     print(">>> 8. Closed incidents can't dispatch; unknown IDs are NotFound...")
@@ -154,8 +160,69 @@ def test_gemini_path():
         voice_agent_module.extract_incident_data = real
 
 
+def test_routing_and_dispatch():
+    print(">>> 12. Routing table: every category has a row; injuries add an ambulance first...")
+    C = IncidentCategory
+    expect = {
+        C.ROAD_ACCIDENT: ["ALERT_TRAFFIC_POLICE"],
+        C.FIRE_HAZARD: ["NOTIFY_FIRE_RESCUE"],
+        C.MEDICAL_EMERGENCY: ["DISPATCH_EMS"],
+        C.INDUSTRIAL_LEAK: ["NOTIFY_FIRE_RESCUE", "DISPATCH_EMS"],
+        C.STRUCTURAL_COLLAPSE: ["NOTIFY_FIRE_RESCUE", "DISPATCH_EMS"],
+        C.CRIMINAL_VIOLENCE: ["ALERT_POLICE"],
+        C.NATURAL_DISASTER: ["NOTIFY_FIRE_RESCUE"],
+        C.OTHER: [],
+    }
+    assert set(expect) == set(C)
+    for cat, action_types in expect.items():
+        assert [t for t, _ in coordination_agent.route(IncidentRecord(category=cat))] == action_types, cat
+    hurt = IncidentRecord(category=C.ROAD_ACCIDENT)
+    hurt.fields["reported_injuries"] = FieldProvenance(field_name="reported_injuries", current_value="bleeding")
+    assert [t for t, _ in coordination_agent.route(hurt)] == ["DISPATCH_EMS", "ALERT_TRAFFIC_POLICE"]
+
+    print(">>> 13. Auto-propose once per department; no duplicate noise on later turns...")
+    inc = orchestrator.create_incident("Fire Hazard", "en")
+    inc.fields["reported_injuries"] = FieldProvenance(field_name="reported_injuries", current_value="burns")
+    first = coordination_agent.auto_propose(inc)
+    assert [a.action_type for a in first] == ["DISPATCH_EMS", "NOTIFY_FIRE_RESCUE"]
+    assert coordination_agent.auto_propose(inc) == []
+    assert not any(e.event_type == "DUPLICATE_PREVENTED" for e in db_engine.get_events(inc.incident_id))
+
+    print(">>> 14. SENT only when delivered; FAILED is visible and retryable; message is templated...")
+    ems, fire = first
+    a = asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, ems.action_id, "Op"))
+    assert a.status == ActionStatus.SENT and "Simulated" in a.delivery_note
+
+    sent = []
+
+    def fake_telegram(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 42}})
+
+    os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+    try:
+        a = asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, fire.action_id, "Op"))
+        assert a.status == ActionStatus.FAILED and "TELEGRAM_CHAT_FIRE" in a.delivery_note
+        assert any(e.event_type == "DISPATCH_FAILED" and e.is_failure_event for e in db_engine.get_events(inc.incident_id))
+
+        os.environ["TELEGRAM_CHAT_FIRE"] = "-1001"
+        dispatch_service.httpx = types.SimpleNamespace(
+            AsyncClient=lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(fake_telegram), **kw)
+        )
+        a = asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, fire.action_id, "Op"))
+        assert a.status == ActionStatus.SENT and a.retry_count == 1 and "message 42" in a.delivery_note
+        assert sent[0]["chat_id"] == "-1001"
+        assert "SIMULATION" in sent[0]["text"] and "Fire Hazard" in sent[0]["text"]
+        assert "maps.google.com" not in sent[0]["text"]  # unconfirmed location gets no map link
+    finally:
+        dispatch_service.httpx = httpx
+        os.environ["TELEGRAM_BOT_TOKEN"] = ""
+        os.environ.pop("TELEGRAM_CHAT_FIRE", None)
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
     test_gemini_path()
+    test_routing_and_dispatch()
     print("ALL CHECKS PASSED")

@@ -435,7 +435,8 @@ function renderCoordinationActions(actions) {
         item.className = 'p-3 bg-slate-900 border border-slate-800 rounded-lg flex flex-col gap-2';
 
         const isApproved = a.operator_approved;
-        const statusBadge = a.status === 'ACKNOWLEDGED' ? 'badge-verified' : (a.status === 'SENT' ? 'badge-inferred' : 'badge-uncertain');
+        const statusBadge = { ACKNOWLEDGED: 'badge-verified', SENT: 'badge-inferred', FAILED: 'badge-critical' }[a.status] || 'badge-uncertain';
+        const canApprove = a.status === 'CREATED' || a.status === 'FAILED';
 
         item.innerHTML = `
             <div class="flex items-center justify-between">
@@ -448,10 +449,11 @@ function renderCoordinationActions(actions) {
             <div class="flex items-center justify-between pt-2 border-t border-slate-800">
                 <span class="text-xs text-slate-400">Human Approval: <strong>${isApproved ? 'Approved by ' + esc(a.operator_id) : 'PENDING'}</strong></span>
                 <div class="flex gap-2">
-                    ${!isApproved ? `<button onclick="approveAction('${a.action_id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">Authorize Dispatch</button>` : ''}
-                    ${isApproved && a.status === 'SENT' ? `<button onclick="simulateAgencyAck('${a.action_id}')" class="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-semibold">Simulate ACK</button>` : ''}
+                    ${canApprove ? `<button onclick="approveAction('${a.action_id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">${a.status === 'FAILED' ? 'Retry Dispatch' : 'Authorize Dispatch'}</button>` : ''}
+                    ${a.status === 'SENT' ? `<button onclick="simulateAgencyAck('${a.action_id}')" class="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-semibold">Simulate ACK</button>` : ''}
                 </div>
             </div>
+            ${a.delivery_note ? `<div class="text-xs ${a.status === 'FAILED' ? 'text-red-300' : 'text-slate-400'}">${esc(a.delivery_note)}</div>` : ''}
         `;
         list.appendChild(item);
     });

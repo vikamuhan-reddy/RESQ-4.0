@@ -4,7 +4,7 @@ Formulates emergency coordination proposals according to agency workflow rules,
 tracks granular transmission and acknowledgment states, and enforces idempotency
 controls to prevent duplicate dispatch requests.
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from backend.models.incident import IncidentRecord, CoordinationAction
 from backend.models.enums import IncidentCategory, IncidentState
@@ -12,44 +12,43 @@ from backend.core.persistence import db_engine
 from backend.core.idempotency import idempotency_mgr
 from backend.core.orchestrator import orchestrator, Conflict, CLOSED_STATES
 
+AMBULANCE = ("DISPATCH_EMS", "Ambulance (108)")
+FIRE = ("NOTIFY_FIRE_RESCUE", "Fire & Rescue (101)")
+POLICE = ("ALERT_POLICE", "Police (100)")
+TRAFFIC = ("ALERT_TRAFFIC_POLICE", "Traffic Police")
+
+# Routing is rules, not AI: the model understands the call, this table decides who gets sent.
+# An ambulance is added whenever injuries are reported. "Other" goes to the operator.
+ROUTES: Dict[IncidentCategory, List[Tuple[str, str]]] = {
+    IncidentCategory.ROAD_ACCIDENT: [TRAFFIC],
+    IncidentCategory.FIRE_HAZARD: [FIRE],
+    IncidentCategory.MEDICAL_EMERGENCY: [AMBULANCE],
+    IncidentCategory.INDUSTRIAL_LEAK: [FIRE, AMBULANCE],
+    IncidentCategory.STRUCTURAL_COLLAPSE: [FIRE, AMBULANCE],
+    IncidentCategory.CRIMINAL_VIOLENCE: [POLICE],
+    IncidentCategory.NATURAL_DISASTER: [FIRE],
+    IncidentCategory.OTHER: [],
+}
+
+
 class CoordinationAgent:
-    def recommend_actions(self, incident: IncidentRecord) -> List[Dict[str, Any]]:
-        """
-        Generates agency dispatch recommendations based on validated incident facts.
-        """
-        proposals = []
-        
-        # 1. Emergency Medical Team recommendation
-        if "reported_injuries" in incident.fields or incident.category == IncidentCategory.MEDICAL_EMERGENCY:
-            proposals.append({
-                "action_type": "DISPATCH_EMS",
-                "target_agency": "Emergency Medical Services (108)",
-                "priority": "HIGH",
-                "recommended_units": "Advanced Life Support (ALS) Ambulance",
-                "reason": "Human casualties/injuries reported in intake"
-            })
-            
-        # 2. Traffic Police recommendation
-        if incident.category == IncidentCategory.ROAD_ACCIDENT:
-            proposals.append({
-                "action_type": "ALERT_TRAFFIC_POLICE",
-                "target_agency": "City Traffic Control & Patrol",
-                "priority": "MEDIUM",
-                "recommended_units": "Sector Patrol Interceptor",
-                "reason": "Road accident may obstruct key transit routes"
-            })
-            
-        # 3. Fire Rescue recommendation
-        if incident.category == IncidentCategory.FIRE_HAZARD or "immediate_danger" in incident.fields:
-            proposals.append({
-                "action_type": "NOTIFY_FIRE_RESCUE",
-                "target_agency": "Fire & Rescue Department",
-                "priority": "HIGH",
-                "recommended_units": "Rapid Response Water Tender",
-                "reason": "Active fire / structural or chemical risk detected"
-            })
-            
-        return proposals
+    def route(self, incident: IncidentRecord) -> List[Tuple[str, str]]:
+        """(action_type, agency) pairs for this incident, most urgent first."""
+        departments = list(ROUTES.get(incident.category, []))
+        if "reported_injuries" in incident.fields and AMBULANCE not in departments:
+            departments.insert(0, AMBULANCE)
+        return departments
+
+    def auto_propose(self, incident: IncidentRecord) -> List[CoordinationAction]:
+        """Proposes each routed department once per incident. Nothing is sent until an operator approves."""
+        if incident.state in CLOSED_STATES:
+            return []
+        already = {a.action_type for a in incident.coordination_actions}
+        return [
+            self.create_action_proposal(incident, action_type, agency)
+            for action_type, agency in self.route(incident)
+            if action_type not in already
+        ]
 
     def create_action_proposal(
         self,
