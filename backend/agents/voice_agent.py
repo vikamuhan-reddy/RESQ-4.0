@@ -1,15 +1,10 @@
 """
 RESQ 4.0 Voice Intelligence Agent (Agent 1)
-Understands fragmented Tamil and English emergency conversations, detects intent,
-extracts structured fields, separates caller vs incident locations, and generates
-adaptive clarification questions without delaying human operator escalation.
+Turns a fragmented Tamil/English emergency conversation into structured fields with provenance,
+separates caller location from incident location, and queues the next question to ask.
 
-Extraction pipeline:
-  1. Try Gemini API structured extraction (if GEMINI_API_KEY is set)
-  2. Try Nominatim geocoding for location strings
-  3. Fall back to keyword rules for any fields Gemini couldn't fill
+Extraction: Gemini structured output on the whole conversation so far; keyword rules as fallback.
 """
-import asyncio
 from typing import Optional
 from datetime import datetime
 
@@ -29,6 +24,7 @@ from backend.models.enums import (
 )
 from backend.core.persistence import db_engine
 from backend.core.orchestrator import orchestrator
+from backend.services.gemini_service import extract_incident_data, Extraction
 
 # ── Keyword fallbacks ────────────────────────────────────────────────────────
 
@@ -66,7 +62,7 @@ DANGER_KEYWORDS = ["fire", "smoke", "explosion", "leak", "trapped", "unconscious
 # ── Main Agent ───────────────────────────────────────────────────────────────
 
 class VoiceIntelligenceAgent:
-    def process_utterance(
+    async def process_utterance(
         self,
         incident: IncidentRecord,
         raw_text: str,
@@ -74,72 +70,38 @@ class VoiceIntelligenceAgent:
         audio_url: Optional[str] = None
     ) -> IncidentRecord:
         """
-        Processes voice transcript into structured provenance fields.
-        Tries Gemini extraction first, falls back to keyword rules.
+        Re-reads the whole conversation so far, not just the latest sentence, so a follow-up
+        like "I'm calling from my office" can't wipe what was said before.
+        Gemini first; keyword rules if Gemini is not configured or fails.
         """
         incident.raw_transcript = (incident.raw_transcript + " " + raw_text).strip()
         incident.language = language
         if audio_url:
             incident.audio_reference_url = audio_url
-
         now = datetime.utcnow().isoformat()
+        transcript = incident.raw_transcript
 
-        # Try Gemini extraction (async in sync context via asyncio)
-        gemini_data = None
+        extraction = None
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(asyncio.run, self._try_gemini(raw_text))
-                    gemini_data = future.result(timeout=10)
-            else:
-                gemini_data = loop.run_until_complete(self._try_gemini(raw_text))
+            extraction = await extract_incident_data(transcript)
         except Exception as e:
-            print(f"[VoiceAgent] Gemini extraction skipped: {e}")
+            # Real AI failure: log it, flag the incident for the operator, carry on with keyword rules
+            orchestrator.handle_ai_service_failure(incident, "Gemini extraction", f"{type(e).__name__}: {e}")
 
-        if gemini_data:
-            self._apply_gemini_data(incident, gemini_data, raw_text, now)
-            extraction_method = "Gemini AI Structured Extraction"
+        if extraction:
+            self._apply_extraction(incident, extraction, transcript, now)
+            extraction_method = "Gemini structured extraction"
         else:
-            self._apply_keyword_rules(incident, raw_text, raw_text.lower(), now)
-            extraction_method = "Keyword Rule Engine (Gemini unavailable)"
-
-        # Geocode incident location if coordinates are still None
-        if incident.locations.incident_location.latitude is None:
-            geocoded = None
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        future = pool.submit(asyncio.run,
-                                             self._try_geocode(incident.locations.incident_location.description))
-                        geocoded = future.result(timeout=8)
-                else:
-                    geocoded = loop.run_until_complete(
-                        self._try_geocode(incident.locations.incident_location.description))
-            except Exception as e:
-                print(f"[VoiceAgent] Geocoding skipped: {e}")
-
-            if geocoded:
-                incident.locations.incident_location.latitude = geocoded["lat"]
-                incident.locations.incident_location.longitude = geocoded["lon"]
-                incident.locations.incident_location.precision = "Street Level (Nominatim)"
-                incident.locations.incident_location.notes = (
-                    f"Geocoded via Nominatim. Confidence: {geocoded['confidence']:.2f}. "
-                    "Verify before dispatch."
-                )
-
-        # Always generate adaptive follow-ups
-        self._generate_adaptive_follow_up(incident, language)
+            self._apply_keyword_rules(incident, transcript, transcript.lower(), now)
+            self._generate_adaptive_follow_up(incident, language)
+            extraction_method = "Keyword rules (AI unavailable)"
 
         if incident.state == IncidentState.RECEIVED:
             orchestrator.advance(incident, IncidentState.INFORMATION_GATHERING, "Voice Intelligence Agent", "First caller statement processed")
 
         db_engine.save_incident(incident)
 
-        evt = TimelineEvent(
+        db_engine.log_event(TimelineEvent(
             incident_id=incident.incident_id,
             event_type="AGENT_INFERENCE",
             actor="Voice Intelligence Agent",
@@ -155,125 +117,79 @@ class VoiceIntelligenceAgent:
                 "incident_loc": incident.locations.incident_location.description,
                 "location_separated": incident.locations.is_separated
             }
-        )
-        db_engine.log_event(evt)
+        ))
         return incident
 
     # ── Gemini path ──────────────────────────────────────────────────────────
 
-    async def _try_gemini(self, text: str):
-        from backend.services.gemini_service import extract_incident_data
-        return await extract_incident_data(text)
+    def _apply_extraction(self, incident: IncidentRecord, e: Extraction, transcript: str, now: str):
+        incident.category = IncidentCategory(e.category)
+        incident.urgency = UrgencyLevel(e.urgency)
 
-    async def _try_geocode(self, address: str):
-        from backend.services.geocoding_service import geocode_location
-        return await geocode_location(address)
-
-    def _apply_gemini_data(self, incident: IncidentRecord, data: dict, raw_text: str, now: str):
-        """Apply Gemini-extracted fields with provenance tracking."""
-        # Category
-        cat_str = data.get("category", "Road Accident")
-        for cat in IncidentCategory:
-            if cat.value.lower() == cat_str.lower():
-                incident.category = cat
-                break
-
-        # Urgency
-        urgency_map = {
-            "CRITICAL": UrgencyLevel.CRITICAL,
-            "HIGH": UrgencyLevel.HIGH,
-            "MEDIUM": UrgencyLevel.MEDIUM,
-            "LOW": UrgencyLevel.LOW,
-        }
-        incident.urgency = urgency_map.get(data.get("urgency", "HIGH"), UrgencyLevel.HIGH)
-
-        # Injuries
-        injuries = data.get("injuries")
-        count = data.get("affected_count")
-        if injuries:
-            incident.fields["reported_injuries"] = FieldProvenance(
-                field_name="reported_injuries",
-                current_value=injuries,
-                original_value=injuries,
+        def put(name: str, value):
+            existing = incident.fields.get(name)
+            if existing and existing.source == ProvenanceSource.OPERATOR_OVERRIDE:
+                return  # never overwrite what an operator corrected or verified
+            if value in (None, "", []):
+                incident.fields.pop(name, None)  # whole conversation re-read: absent now means not said
+                return
+            incident.fields[name] = FieldProvenance(
+                field_name=name,
+                current_value=value,
+                original_value=value,
                 source=ProvenanceSource.AI_EXTRACTION,
                 timestamp=now,
-                confidence=float(data.get("confidence", 0.85)),
+                confidence=e.confidence,
                 verification_status=VerificationStatus.AI_INFERRED_AWAITING_CONFIRMATION,
-                extraction_method="Gemini AI Structured Extraction",
-                transcript_reference=raw_text
-            )
-            incident.urgency = UrgencyLevel.CRITICAL
-        if count is not None:
-            incident.fields["affected_count"] = FieldProvenance(
-                field_name="affected_count",
-                current_value=count,
-                original_value=count,
-                source=ProvenanceSource.AI_EXTRACTION,
-                timestamp=now,
-                confidence=float(data.get("confidence", 0.85)),
-                verification_status=VerificationStatus.AI_INFERRED_AWAITING_CONFIRMATION,
-                extraction_method="Gemini AI Structured Extraction",
-                transcript_reference=raw_text
+                extraction_method="Gemini structured extraction",
+                transcript_reference=transcript
             )
 
-        # Immediate danger
-        if data.get("immediate_danger"):
-            incident.fields["immediate_danger"] = FieldProvenance(
-                field_name="immediate_danger",
-                current_value="Active Hazard / Vulnerable Victims Reported",
-                original_value="Active Hazard / Vulnerable Victims Reported",
-                source=ProvenanceSource.AI_EXTRACTION,
-                timestamp=now,
-                confidence=float(data.get("confidence", 0.9)),
-                verification_status=VerificationStatus.AI_INFERRED_AWAITING_CONFIRMATION,
-                extraction_method="Gemini AI Structured Extraction",
-                transcript_reference=raw_text
-            )
+        put("reported_injuries", e.injuries)
+        put("affected_count", e.affected_count)
+        put("immediate_danger", "; ".join(e.hazards))
 
-        # Locations
-        incident_loc_str = data.get("incident_location")
-        caller_loc_str = data.get("caller_location")
-        caller_separated = data.get("caller_separated", False)
-        confidence = float(data.get("confidence", 0.75))
+        loc = incident.locations
+        if loc.incident_location.verification_status != VerificationStatus.INDEPENDENTLY_VERIFIED:
+            if e.incident_location_text:
+                loc.incident_location = LocationRecord(
+                    description=e.incident_location_text,
+                    source=ProvenanceSource.AI_EXTRACTION,
+                    timestamp=now,
+                    precision="Caller's words (not on map until an operator confirms)",
+                    verification_status=VerificationStatus.UNCERTAIN,
+                    confidence=e.confidence,
+                    notes="From the caller's description. Not geocoded; confirm before dispatch."
+                )
+            else:
+                loc.incident_location = LocationRecord(
+                    description="Location not given yet",
+                    source=ProvenanceSource.AI_EXTRACTION,
+                    timestamp=now,
+                    precision="Unknown",
+                    verification_status=VerificationStatus.MISSING,
+                    confidence=0.0
+                )
 
-        incident.locations.is_separated = caller_separated
-        if caller_separated:
-            incident.locations.separation_rationale = "AI determined caller is not at the incident scene"
+        loc.is_separated = not e.caller_on_scene
+        loc.separation_rationale = "Caller says they are not at the incident" if loc.is_separated else None
+        loc.caller_location = LocationRecord(
+            description=(e.caller_location_text or "Away from the scene (not said where)") if loc.is_separated else "At the incident scene",
+            source=ProvenanceSource.AI_EXTRACTION,
+            timestamp=now,
+            precision="Caller-stated",
+            verification_status=VerificationStatus.CALLER_REPORTED,
+            confidence=e.confidence
+        )
 
-        if incident_loc_str:
-            incident.locations.incident_location = LocationRecord(
-                description=incident_loc_str,
-                source=ProvenanceSource.AI_EXTRACTION,
-                timestamp=now,
-                precision="Text Description (Geocoding pending)",
-                verification_status=VerificationStatus.UNCERTAIN,
-                confidence=confidence,
-                notes="Extracted by Gemini AI. Coordinates pending geocoding. Verify before dispatch."
-            )
-        
-        if caller_separated and caller_loc_str:
-            incident.locations.caller_location = LocationRecord(
-                description=caller_loc_str,
-                source=ProvenanceSource.AI_EXTRACTION,
-                timestamp=now,
-                precision="Caller-stated location",
-                verification_status=VerificationStatus.CALLER_REPORTED,
-                confidence=confidence
-            )
-
-        # Note ambiguities
-        ambiguities = data.get("ambiguities", [])
-        if ambiguities:
-            incident.fields["ai_ambiguities"] = FieldProvenance(
-                field_name="ai_ambiguities",
-                current_value="; ".join(ambiguities),
-                original_value="; ".join(ambiguities),
-                source=ProvenanceSource.AI_EXTRACTION,
-                timestamp=now,
-                confidence=1.0,
-                verification_status=VerificationStatus.AI_INFERRED_AWAITING_CONFIRMATION,
-                extraction_method="Gemini AI Ambiguity Detection"
-            )
+        incident.follow_up_queue.clear()
+        if e.missing:
+            incident.follow_up_queue.append(AdaptiveFollowUp(
+                question_text=e.next_question_ta if incident.language == "ta" else e.next_question_en,
+                target_field=e.missing[0],
+                language=incident.language,
+                rationale="Still needed: " + ", ".join(e.missing)
+            ))
 
     # ── Keyword fallback path ────────────────────────────────────────────────
 
@@ -326,7 +242,7 @@ class VoiceIntelligenceAgent:
         for cat, keywords in CATEGORY_KEYWORDS.items():
             if any(w in text_lower for w in keywords):
                 return cat
-        return IncidentCategory.ROAD_ACCIDENT
+        return IncidentCategory.OTHER
 
     def _extract_injuries(self, text: str, text_lower: str):
         injuries = None

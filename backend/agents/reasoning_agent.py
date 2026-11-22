@@ -142,15 +142,15 @@ class IncidentReasoningAgent:
                 other.locations.incident_location.longitude
             )
             
+            # A place match is required; same category alone would flag every accident in the city
             reasons = []
-            if other.category == incident.category:
-                reasons.append(f"Matching category: {incident.category.value}")
-                
             if dist_km <= 2.5:
                 reasons.append(f"Proximity: within {dist_km:.2f} km")
             elif "bridge" in other.locations.incident_location.description.lower() and "bridge" in incident.locations.incident_location.description.lower():
                 reasons.append("Shared landmark reference ('Bridge')")
-                
+            if reasons and other.category == incident.category:
+                reasons.append(f"Matching category: {incident.category.value}")
+
             if reasons:
                 candidates.append({
                     "incident_id": other.incident_id,

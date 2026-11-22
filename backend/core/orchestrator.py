@@ -123,12 +123,12 @@ class OrchestrationEngine:
         db_engine.log_event(evt)
         return incident
 
-    def handle_ai_service_failure(self, incident_id: str, agent_name: str, error_msg: str) -> IncidentRecord:
+    def handle_ai_service_failure(self, incident: IncidentRecord, agent_name: str, error_msg: str) -> IncidentRecord:
         """
         Gracefully absorbs AI timeouts or crashes without terminating incident.
+        Takes the caller's incident object so it can't save over in-flight changes with a stale copy.
         """
-        incident = self.get_incident(incident_id)
-        
+        error_msg = error_msg[:300]
         incident.reasoning.uncertain_fields.append(f"AI Service Failure ({agent_name})")
         incident.reasoning.operator_action_recommendations.append(f"Manual operator verification needed due to {agent_name} failure.")
         if self.can_advance(incident, IncidentState.OPERATOR_REVIEW):
@@ -136,7 +136,7 @@ class OrchestrationEngine:
         db_engine.save_incident(incident)
         
         evt = TimelineEvent(
-            incident_id=incident_id,
+            incident_id=incident.incident_id,
             event_type="AI_SERVICE_FAILURE",
             actor="Continuity Engine (Agent Watchdog)",
             summary=f"{agent_name} encountered an error: {error_msg}. Preserving record and escalating to Operator.",

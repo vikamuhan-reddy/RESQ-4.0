@@ -25,6 +25,7 @@ from backend.core.orchestrator import orchestrator, NotFound, Conflict
 from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
+from backend.services.gemini_service import transcribe_audio as gemini_transcribe
 
 app = FastAPI(
     title="RESQ 4.0 Emergency Intelligence Platform",
@@ -112,53 +113,26 @@ class AgencyAckRequest(BaseModel):
 async def transcribe_audio(request: Request):
     """
     Accepts audio blob (multipart/form-data) and returns transcript.
-    Uses Gemini if GEMINI_API_KEY is set, otherwise returns error asking user to type.
+    Audio is sent inline to Gemini (nothing stored server-side); on any problem the
+    browser falls back to its own speech-recognition text.
     """
-    import os
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
-    
+    form = await request.form()
+    audio_file = form.get("audio")
+    if not audio_file:
+        raise HTTPException(status_code=400, detail="No audio file provided")
+    audio_bytes = await audio_file.read()
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Audio too large (10 MB max)")
+
     try:
-        form = await request.form()
-        audio_file = form.get("audio")
-        
-        if not audio_file:
-            raise HTTPException(status_code=400, detail="No audio file provided")
-        
-        if not gemini_key:
+        transcript = await gemini_transcribe(audio_bytes, audio_file.content_type or "audio/webm")
+        if transcript is None:
             return JSONResponse({
                 "transcript": None,
                 "error": "Transcription unavailable: GEMINI_API_KEY not configured. Please type the report manually.",
                 "fallback": "manual"
-            }, status_code=200)
-        
-        audio_bytes = await audio_file.read()
-        
-        # Use Gemini for audio transcription
-        import google.generativeai as genai
-        import tempfile, os as _os
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        
-        # Save to temp file
-        suffix = ".webm"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        
-        try:
-            audio_part = genai.upload_file(tmp_path, mime_type="audio/webm")
-            response = model.generate_content([
-                "Transcribe this emergency call audio exactly as spoken. If Tamil or mixed Tamil-English, preserve both languages.",
-                audio_part
-            ])
-            transcript = response.text.strip()
-        finally:
-            _os.unlink(tmp_path)
-        
+            })
         return {"transcript": transcript, "source": "gemini_audio"}
-        
-    except HTTPException:
-        raise
     except Exception as e:
         return JSONResponse({
             "transcript": None,
@@ -220,7 +194,7 @@ async def process_voice_intake(incident_id: str, req: VoiceIntakeRequest):
         raise HTTPException(status_code=404, detail="Incident not found")
     
     # Run Voice Agent
-    inc = voice_agent.process_utterance(inc, req.transcript, req.language, req.audio_url)
+    inc = await voice_agent.process_utterance(inc, req.transcript, req.language, req.audio_url)
     
     # Run Incident Reasoning Agent
     inc = reasoning_agent.evaluate_incident(inc)
@@ -336,7 +310,7 @@ async def startup_event():
     if not existing:
         # Seed initial rich incident
         inc = orchestrator.create_incident("Road Accident", "ta")
-        inc = voice_agent.process_utterance(
+        inc = await voice_agent.process_utterance(
             incident=inc,
             raw_text="வணக்கம், அண்ணா மேம்பாலம் அருகே ஒரு பெரிய விபத்து. இரண்டு பேர் பலத்த காயமடைந்துள்ளனர். நான் இங்க இல்ல, என் அலுவலகத்திலிருந்து பார்க்கிறேன்.",
             language="ta"
