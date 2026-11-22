@@ -5,11 +5,9 @@ tracks granular transmission and acknowledgment states, and enforces idempotency
 controls to prevent duplicate dispatch requests.
 """
 from typing import List, Dict, Any, Optional
-import uuid
-from datetime import datetime
 
-from backend.models.incident import IncidentRecord, CoordinationAction, TimelineEvent
-from backend.models.enums import ActionStatus, IncidentCategory, IncidentState
+from backend.models.incident import IncidentRecord, CoordinationAction
+from backend.models.enums import IncidentCategory, IncidentState
 from backend.core.persistence import db_engine
 from backend.core.idempotency import idempotency_mgr
 

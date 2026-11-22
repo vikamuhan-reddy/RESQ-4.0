@@ -3,7 +3,7 @@ RESQ 4.0 Central Orchestration & Safety Engine
 The authoritative controller enforcing state transitions, authorization policies,
 safety constraints, failure continuity, and human-in-the-loop governance.
 """
-from typing import Optional, Dict, Any, List
+from typing import Dict, Any, List
 from datetime import datetime
 
 from backend.models.incident import (
@@ -19,11 +19,9 @@ from backend.models.enums import (
     ProvenanceSource,
     ActionStatus,
     ConnectionState,
-    UrgencyLevel,
     IncidentCategory
 )
 from backend.core.persistence import db_engine
-from backend.core.idempotency import idempotency_mgr
 
 # Valid allowed state transitions
 VALID_TRANSITIONS: Dict[IncidentState, List[IncidentState]] = {

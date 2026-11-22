@@ -6,7 +6,6 @@ and generates actionable recommendations for the human operator.
 """
 from typing import List, Dict, Any
 import math
-from datetime import datetime
 
 from backend.models.incident import IncidentRecord, AgentReasoning, TimelineEvent
 from backend.models.enums import UrgencyLevel, VerificationStatus, IncidentState

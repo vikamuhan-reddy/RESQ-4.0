@@ -3,30 +3,28 @@ RESQ 4.0 FastAPI Application Entrypoint
 Exposes the complete REST API and Server-Sent Events (SSE) live stream
 for the Operator Intelligence Dashboard, Agent Orchestration, and Continuity Engine.
 """
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 import os
 import asyncio
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.models.incident import IncidentRecord, CoordinationAction, TimelineEvent
-from backend.models.enums import IncidentState, VerificationStatus, ConnectionState
 from backend.core.persistence import db_engine
 from backend.core.orchestrator import orchestrator
 from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
-from backend.agents.recovery_agent import recovery_agent
-from backend.services.speech_service import speech_service
-from backend.services.evaluation_service import evaluation_service
-from backend.data.test_scenarios import SCENARIO_DEFINITIONS, run_scenario, run_all_scenarios
-from backend.data.demo_script import DEMO_STEPS, demo_runner
 
 app = FastAPI(
     title="RESQ 4.0 Emergency Intelligence Platform",
@@ -34,14 +32,22 @@ app = FastAPI(
     version="4.0.0"
 )
 
-# Enable CORS
+import os as _os
+_ALLOWED_ORIGINS = [o.strip() for o in _os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000"
+).split(",") if o.strip()]
+
+# Enable CORS — restrict origins in production via ALLOWED_ORIGINS env var
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Operator-ID"],
 )
+
+DISPATCH_MODE = _os.getenv("DISPATCH_MODE", "simulation")
 
 # Client listeners for real-time SSE stream
 sse_subscribers = set()
@@ -70,10 +76,6 @@ class VoiceIntakeRequest(BaseModel):
 class DisconnectRequest(BaseModel):
     reason: str = "Caller network dropped unexpectedly"
 
-class AIFailureRequest(BaseModel):
-    agent_name: str = "Voice Intelligence Agent"
-    error_msg: str = "Transcription service socket timeout 504"
-
 class FieldOverrideRequest(BaseModel):
     field_name: str
     new_value: Any
@@ -92,6 +94,66 @@ class ApproveActionRequest(BaseModel):
 class AgencyAckRequest(BaseModel):
     action_id: str
     responder_ref: str = "AMBULANCE-UNIT-108"
+
+# ----------------- Transcription Endpoint -----------------
+
+@app.post("/api/transcribe")
+async def transcribe_audio(request: Request):
+    """
+    Accepts audio blob (multipart/form-data) and returns transcript.
+    Uses Gemini if GEMINI_API_KEY is set, otherwise returns error asking user to type.
+    """
+    import os
+    gemini_key = os.getenv("GEMINI_API_KEY", "")
+    
+    try:
+        form = await request.form()
+        audio_file = form.get("audio")
+        
+        if not audio_file:
+            raise HTTPException(status_code=400, detail="No audio file provided")
+        
+        if not gemini_key:
+            return JSONResponse({
+                "transcript": None,
+                "error": "Transcription unavailable: GEMINI_API_KEY not configured. Please type the report manually.",
+                "fallback": "manual"
+            }, status_code=200)
+        
+        audio_bytes = await audio_file.read()
+        
+        # Use Gemini for audio transcription
+        import google.generativeai as genai
+        import tempfile, os as _os
+        genai.configure(api_key=gemini_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        # Save to temp file
+        suffix = ".webm"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            audio_part = genai.upload_file(tmp_path, mime_type="audio/webm")
+            response = model.generate_content([
+                "Transcribe this emergency call audio exactly as spoken. If Tamil or mixed Tamil-English, preserve both languages.",
+                audio_part
+            ])
+            transcript = response.text.strip()
+        finally:
+            _os.unlink(tmp_path)
+        
+        return {"transcript": transcript, "source": "gemini_audio"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({
+            "transcript": None,
+            "error": f"Transcription failed: {str(e)}. Please type the report manually.",
+            "fallback": "manual"
+        }, status_code=200)
 
 # Mount static folder
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
@@ -161,12 +223,6 @@ async def simulate_disconnect(incident_id: str, req: DisconnectRequest):
     await broadcast_event("CALLER_DISCONNECTED", inc.model_dump())
     return inc
 
-@app.post("/api/incidents/{incident_id}/ai-failure")
-async def simulate_ai_failure(incident_id: str, req: AIFailureRequest):
-    inc = orchestrator.handle_ai_service_failure(incident_id, req.agent_name, req.error_msg)
-    await broadcast_event("AI_FAILURE_SIMULATED", inc.model_dump())
-    return inc
-
 @app.post("/api/incidents/{incident_id}/acknowledge")
 async def operator_acknowledge(incident_id: str, operator_id: str = "Operator-1"):
     inc = orchestrator.operator_acknowledge(incident_id, operator_id)
@@ -208,9 +264,20 @@ async def approve_coordination_action(incident_id: str, req: ApproveActionReques
         action_id=req.action_id,
         operator_id=req.operator_id
     )
+    # Tag simulation mode on the action
+    action.is_simulation = (DISPATCH_MODE != "live")
+    action.dispatch_mode = DISPATCH_MODE
+    db_engine.save_action(action)
+    
     updated_inc = db_engine.get_incident(incident_id)
-    await broadcast_event("ACTION_APPROVED", updated_inc.model_dump())
-    return action
+    await broadcast_event("ACTION_APPROVED", {
+        **updated_inc.model_dump(),
+        "_simulation_warning": (
+            "⚠ SIMULATION MODE: This approval is local only. No real agency was notified."
+            if action.is_simulation else "LIVE DISPATCH: Real agency notified."
+        )
+    })
+    return {**action.model_dump(), "_simulation_warning": "⚠ SIMULATION — no real dispatch occurred" if action.is_simulation else ""}
 
 @app.post("/api/incidents/{incident_id}/simulate-ack")
 async def simulate_agency_ack(incident_id: str, req: AgencyAckRequest):
@@ -226,63 +293,6 @@ async def simulate_agency_ack(incident_id: str, req: AgencyAckRequest):
 @app.get("/api/incidents/{incident_id}/timeline")
 async def get_incident_timeline(incident_id: str):
     return db_engine.get_events(incident_id)
-
-@app.get("/api/incidents/{incident_id}/continuity-analysis")
-async def get_continuity_analysis(incident_id: str):
-    inc = db_engine.get_incident(incident_id)
-    if not inc:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return recovery_agent.analyze_incident_continuity(inc)
-
-# ----------------- Continuity & System Recovery -----------------
-
-@app.post("/api/recovery/restart-backend")
-async def simulate_restart():
-    result = db_engine.simulate_backend_restart()
-    await broadcast_event("BACKEND_RESTARTED", result)
-    return result
-
-# ----------------- Evaluation & Baselines -----------------
-
-@app.get("/api/evaluation/benchmarks")
-async def get_evaluation_benchmarks():
-    return evaluation_service.get_benchmark_comparison()
-
-# ----------------- 10 Required Test Scenarios -----------------
-
-@app.get("/api/scenarios")
-async def get_scenarios_list():
-    return SCENARIO_DEFINITIONS
-
-@app.post("/api/scenarios/run/{scenario_id}")
-async def run_single_scenario(scenario_id: str):
-    res = run_scenario(scenario_id)
-    await broadcast_event("SCENARIO_EXECUTED", res)
-    return res
-
-@app.post("/api/scenarios/run-all")
-async def run_all_test_scenarios():
-    res = run_all_scenarios()
-    await broadcast_event("ALL_SCENARIOS_EXECUTED", res)
-    return res
-
-# ----------------- 3-Minute Demonstration Plan -----------------
-
-@app.get("/api/demo/steps")
-async def get_demo_steps():
-    return DEMO_STEPS
-
-@app.post("/api/demo/step/{step_number}")
-async def run_demo_step(step_number: int, incident_id: Optional[str] = None):
-    res = demo_runner.execute_step(step_number, incident_id)
-    await broadcast_event("DEMO_STEP_EXECUTED", res)
-    return res
-
-# ----------------- Speech & Audio Service -----------------
-
-@app.get("/api/speech/samples")
-async def get_speech_samples():
-    return speech_service.get_sample_utterances()
 
 # ----------------- Server-Sent Events (SSE) Live Feed -----------------
 

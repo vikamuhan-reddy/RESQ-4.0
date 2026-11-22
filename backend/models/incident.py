@@ -83,6 +83,8 @@ class CoordinationAction(BaseModel):
     operator_approved: bool = False
     operator_id: Optional[str] = None
     acknowledgment_reference: Optional[str] = None
+    is_simulation: bool = True  # Always True until real dispatch integration is wired
+    dispatch_mode: str = "simulation"  # "simulation" | "live"
 
 class AgentReasoning(BaseModel):
     urgency_explanation: str = "Pending evaluation"
@@ -139,4 +141,3 @@ class IncidentRecord(BaseModel):
     operator_notes: List[str] = Field(default_factory=list)
     is_merged: bool = False
     merged_into_id: Optional[str] = None
-    is_recovered_session: bool = False

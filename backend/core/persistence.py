@@ -7,13 +7,12 @@ import sqlite3
 import json
 import os
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from datetime import datetime
 
 from backend.models.incident import IncidentRecord, TimelineEvent, CoordinationAction
-from backend.models.enums import IncidentState, ConnectionState
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resq_continuity.db")
+DB_PATH = os.getenv("RESQ_DB_PATH") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "resq_continuity.db")
 
 class PersistenceEngine:
     _lock = threading.Lock()
@@ -243,51 +242,5 @@ class PersistenceEngine:
                 for r in rows:
                     inc = IncidentRecord.model_validate_json(r["data_json"])
                     self._memory_cache[inc.incident_id] = inc
-
-    def simulate_backend_restart(self) -> Dict[str, Any]:
-        """
-        Simulates sudden crash/restart:
-        1. Wipes in-memory volatile cache
-        2. Re-reads durable state from SQLite
-        3. Identifies incomplete / interrupted operations
-        4. Reconciles state safely without data loss
-        """
-        # Step 1: Wipe cache completely
-        self._memory_cache.clear()
-        
-        # Step 2: Restore from disk
-        self.restore_cache_from_disk()
-        
-        reconciled_count = 0
-        restored_incidents = []
-        
-        # Step 3: Reconciliation check
-        for inc_id, inc in list(self._memory_cache.items()):
-            inc.is_recovered_session = True
-            
-            # Log recovery event in auditable timeline
-            evt = TimelineEvent(
-                incident_id=inc.incident_id,
-                event_type="RECOVERY",
-                actor="Continuity Engine (Restart Recovery)",
-                summary=f"Incident state restored from durable SQLite store after backend restart",
-                details={
-                    "previous_state": inc.state.value,
-                    "connection_state": inc.connection_state.value,
-                    "fields_restored": list(inc.fields.keys()),
-                    "pending_actions_checked": len(inc.coordination_actions)
-                }
-            )
-            self.log_event(evt)
-            self.save_incident(inc)
-            reconciled_count += 1
-            restored_incidents.append(inc_id)
-            
-        return {
-            "success": True,
-            "message": f"Successfully recovered {reconciled_count} incidents from durable SQLite storage",
-            "recovered_incidents": restored_incidents,
-            "timestamp": datetime.utcnow().isoformat()
-        }
 
 db_engine = PersistenceEngine()

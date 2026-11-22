@@ -7,8 +7,6 @@
 let currentIncidents = [];
 let activeIncidentId = null;
 let activeTab = 'queue';
-let demoInterval = null;
-let currentDemoStep = 1;
 
 document.addEventListener('DOMContentLoaded', async () => {
     initApp();
@@ -19,6 +17,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function initApp() {
     mapController.init();
+    injectSimulationBanner();
 }
 
 function setupEventListeners() {
@@ -42,10 +41,16 @@ function setupEventListeners() {
     const recordBtn = document.getElementById('btn-record');
     if (recordBtn) {
         recordBtn.addEventListener('click', async () => {
-            const isRecording = await voiceInterface.toggleRecording('waveform-canvas', (transcript) => {
-                const input = document.getElementById('voice-transcript-input');
-                if (input) input.value = transcript;
-            });
+            const isRecording = await voiceInterface.toggleRecording(
+                'waveform-canvas',
+                (transcript, isFinal) => {
+                    const input = document.getElementById('voice-transcript-input');
+                    if (input && (isFinal || !input.value)) input.value = transcript;
+                },
+                (message, type) => {
+                    showVoiceStatus(message, type);
+                }
+            );
             recordBtn.innerHTML = isRecording ? 
                 `<span class="w-3 h-3 rounded-full bg-red-500 animate-ping mr-2"></span> Stop Recording` : 
                 `<i class="fas fa-microphone mr-2"></i> Push to Talk`;
@@ -78,6 +83,46 @@ function setupEventListeners() {
     }
 }
 
+// Voice status display helper
+function showVoiceStatus(message, type = 'info') {
+    let el = document.getElementById('voice-status-msg');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'voice-status-msg';
+        el.style.cssText = 'margin-top:6px; padding:6px 10px; border-radius:6px; font-size:12px; font-weight:600;';
+        const btn = document.getElementById('btn-record');
+        if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
+    }
+    const styles = {
+        info:    'background:#0e3a4a; color:#67e8f9; border:1px solid #0891b2;',
+        success: 'background:#052e16; color:#86efac; border:1px solid #16a34a;',
+        warn:    'background:#3d2200; color:#fcd34d; border:1px solid #d97706;',
+        error:   'background:#3b0a0a; color:#fca5a5; border:1px solid #dc2626;',
+    };
+    el.style.cssText += styles[type] || styles.info;
+    el.textContent = message; // textContent — no XSS risk
+    setTimeout(() => { if (el) el.textContent = ''; }, 8000);
+}
+
+// Simulation banner — injected once on page load
+function injectSimulationBanner() {
+    if (document.getElementById('simulation-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'simulation-banner';
+    banner.style.cssText = [
+        'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:9999',
+        'background:#92400e', 'color:#fef3c7',
+        'text-align:center', 'padding:7px 16px',
+        'font-size:13px', 'font-weight:700',
+        'letter-spacing:0.03em', 'border-bottom:2px solid #d97706',
+        'pointer-events:none'
+    ].join(';');
+    banner.textContent = '⚠ SIMULATION MODE — All dispatch actions are LOCAL ONLY. No real emergency agency is contacted.';
+    document.body.insertBefore(banner, document.body.firstChild);
+    // Push page content down
+    document.body.style.paddingTop = (parseInt(document.body.style.paddingTop || '0') + 36) + 'px';
+}
+
 function switchTab(tabId) {
     activeTab = tabId;
     document.querySelectorAll('[data-tab]').forEach(btn => {
@@ -88,14 +133,10 @@ function switchTab(tabId) {
         }
     });
 
-    ['tab-queue', 'tab-detail', 'tab-demo', 'tab-scenarios', 'tab-benchmarks'].forEach(id => {
+    ['tab-queue', 'tab-detail'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.classList.toggle('hidden', id !== `tab-${tabId}`);
     });
-
-    if (tabId === 'benchmarks') loadBenchmarks();
-    if (tabId === 'scenarios') loadScenarios();
-    if (tabId === 'demo') loadDemoSteps();
 }
 
 // ----------------- Real-time Event Handler -----------------
@@ -254,22 +295,56 @@ function renderProvenanceFields(fields) {
         const historyBtn = historyCount > 0 ? 
             `<span class="text-xs text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer" title="Has ${historyCount} previous revisions">${historyCount} Revisions</span>` : '';
 
-        card.innerHTML = `
-            <div class="flex items-center justify-between">
-                <span class="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono">${f.field_name.replace('_', ' ')}</span>
-                <div class="flex items-center gap-2">
-                    ${historyBtn}
-                    <span class="px-2 py-0.5 rounded text-xs font-semibold ${f.verification_status === 'INDEPENDENTLY_VERIFIED' ? 'badge-verified' : 'badge-uncertain'}">${f.verification_status}</span>
-                </div>
-            </div>
-            <div class="text-sm font-semibold text-slate-100">${f.current_value}</div>
-            <div class="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-800/60">
-                <span>Source: <strong class="text-slate-400">${f.source}</strong> (Confidence: ${(f.confidence * 100).toFixed(0)}%)</span>
-                <button onclick="promptFieldOverride('${f.field_name}', '${f.current_value}')" class="text-cyan-400 hover:text-cyan-300 text-xs font-semibold flex items-center gap-1">
-                    <i class="fas fa-edit"></i> Edit / Verify
-                </button>
-            </div>
-        `;
+        // Safe rendering — set text via DOM methods, not innerHTML with user data
+        const nameEl = document.createElement('span');
+        nameEl.className = 'text-xs font-bold uppercase tracking-wider text-slate-400 font-mono';
+        nameEl.textContent = f.field_name.replace(/_/g, ' ');
+
+        const statusEl = document.createElement('span');
+        statusEl.className = `px-2 py-0.5 rounded text-xs font-semibold ${f.verification_status === 'INDEPENDENTLY_VERIFIED' ? 'badge-verified' : 'badge-uncertain'}`;
+        statusEl.textContent = f.verification_status;
+
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'flex items-center justify-between';
+        const badgeDiv = document.createElement('div');
+        badgeDiv.className = 'flex items-center gap-2';
+        if (historyCount > 0) {
+            const hBtn = document.createElement('span');
+            hBtn.className = 'text-xs text-cyan-400 bg-cyan-950/60 px-1.5 py-0.5 rounded border border-cyan-800 cursor-pointer';
+            hBtn.title = `Has ${historyCount} previous revisions`;
+            hBtn.textContent = `${historyCount} Revisions`;
+            badgeDiv.appendChild(hBtn);
+        }
+        badgeDiv.appendChild(statusEl);
+        headerDiv.appendChild(nameEl);
+        headerDiv.appendChild(badgeDiv);
+
+        const valueEl = document.createElement('div');
+        valueEl.className = 'text-sm font-semibold text-slate-100';
+        valueEl.textContent = typeof f.current_value === 'object' ? JSON.stringify(f.current_value) : String(f.current_value);
+
+        const footerDiv = document.createElement('div');
+        footerDiv.className = 'flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-800/60';
+        const sourceSpan = document.createElement('span');
+        const sourceStrong = document.createElement('strong');
+        sourceStrong.className = 'text-slate-400';
+        sourceStrong.textContent = f.source;
+        sourceSpan.textContent = 'Source: ';
+        sourceSpan.appendChild(sourceStrong);
+        const confSpan = document.createTextNode(` (Confidence: ${(f.confidence * 100).toFixed(0)}%)`);
+        sourceSpan.appendChild(confSpan);
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'text-cyan-400 hover:text-cyan-300 text-xs font-semibold flex items-center gap-1';
+        editBtn.innerHTML = '<i class="fas fa-edit"></i> Edit / Verify';
+        editBtn.addEventListener('click', () => promptFieldOverride(f.field_name, String(f.current_value)));
+
+        footerDiv.appendChild(sourceSpan);
+        footerDiv.appendChild(editBtn);
+
+        card.appendChild(headerDiv);
+        card.appendChild(valueEl);
+        card.appendChild(footerDiv);
         container.appendChild(card);
     });
 }
@@ -337,6 +412,12 @@ function renderCoordinationActions(actions) {
     const list = document.getElementById('coordination-actions-list');
     if (!list) return;
     list.innerHTML = '';
+
+    // Simulation mode notice
+    const simNotice = document.createElement('div');
+    simNotice.style.cssText = 'background:#3d2200;color:#fcd34d;border:1px solid #d97706;border-radius:6px;padding:8px 12px;font-size:12px;font-weight:700;margin-bottom:10px;';
+    simNotice.textContent = '⚠ SIMULATION MODE: Approving actions marks them locally only. No real dispatch occurs.';
+    list.appendChild(simNotice);
 
     if (!actions || actions.length === 0) {
         list.innerHTML = `<div class="text-slate-500 text-xs py-3 italic">No coordination actions dispatched yet. Operators can propose below.</div>`;
@@ -490,54 +571,6 @@ async function simulateCallerDisconnect() {
     }
 }
 
-async function simulateAIFailure() {
-    if (!activeIncidentId) return alert('Select an active incident first.');
-    try {
-        await API.post(`/api/incidents/${activeIncidentId}/ai-failure`, {
-            agent_name: 'Voice Intelligence Agent',
-            error_msg: 'Upstream ASR WebSocket 504 Timeout'
-        });
-        await selectIncident(activeIncidentId);
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
-}
-
-async function simulateBackendRestart() {
-    try {
-        const res = await API.post('/api/recovery/restart-backend');
-        alert(`Backend Restart & Durable Recovery Complete!\n${res.message}`);
-        await loadIncidents();
-        if (activeIncidentId) await selectIncident(activeIncidentId);
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
-}
-
-async function triggerDuplicateActionTest() {
-    if (!activeIncidentId) return alert('Select an active incident first.');
-    try {
-        const key = `TEST-DUP-IDEMP-${Date.now()}`;
-        // Call 1
-        const r1 = await API.post(`/api/incidents/${activeIncidentId}/propose-action`, {
-            action_type: 'DISPATCH_EMS',
-            target_agency: '108 Ambulance',
-            idempotency_key: key
-        });
-        // Call 2 with identical key
-        const r2 = await API.post(`/api/incidents/${activeIncidentId}/propose-action`, {
-            action_type: 'DISPATCH_EMS',
-            target_agency: '108 Ambulance',
-            idempotency_key: key
-        });
-        
-        alert(`Duplicate Action Test Result:\nCall 1 Action ID: ${r1.action_id}\nCall 2 Action ID: ${r2.action_id}\nIdentical: ${r1.action_id === r2.action_id ? 'YES (Deduplication Successful!)' : 'NO'}`);
-        await selectIncident(activeIncidentId);
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
-}
-
 async function createNewIncident(category = 'Road Accident', lang = 'en') {
     try {
         const inc = await API.post('/api/incidents', { category, language: lang });
@@ -545,203 +578,5 @@ async function createNewIncident(category = 'Road Accident', lang = 'en') {
         selectIncident(inc.incident_id);
     } catch (err) {
         alert('Error creating incident: ' + err.message);
-    }
-}
-
-// ----------------- 3-Minute Demonstration Runner -----------------
-async function loadDemoSteps() {
-    try {
-        const steps = await API.get('/api/demo/steps');
-        const container = document.getElementById('demo-steps-container');
-        if (!container) return;
-        container.innerHTML = '';
-
-        steps.forEach(s => {
-            const card = document.createElement('div');
-            card.id = `demo-step-card-${s.step}`;
-            card.className = `p-4 resq-card border border-slate-800 rounded-lg flex flex-col gap-2 transition cursor-pointer hover:border-cyan-500/60`;
-            card.onclick = () => runDemoStep(s.step);
-
-            card.innerHTML = `
-                <div class="flex items-center justify-between">
-                    <span class="font-mono text-xs font-bold text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800">STEP ${s.step} • ${s.timeframe}</span>
-                    <button class="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold">Run Step</button>
-                </div>
-                <div class="text-sm font-bold text-slate-100">${s.title}</div>
-                <div class="text-xs text-slate-400">${s.narrative}</div>
-                <div id="demo-step-result-${s.step}" class="hidden mt-2 p-2.5 rounded bg-slate-900 border border-slate-800 font-mono text-xs text-slate-300"></div>
-            `;
-            container.appendChild(card);
-        });
-    } catch (err) {
-        console.error('Failed to load demo steps:', err);
-    }
-}
-
-async function runDemoStep(stepNumber) {
-    try {
-        const resBox = document.getElementById(`demo-step-result-${stepNumber}`);
-        if (resBox) {
-            resBox.classList.remove('hidden');
-            resBox.innerHTML = `<span class="text-cyan-400"><i class="fas fa-spinner fa-spin mr-1"></i> Executing step ${stepNumber}...</span>`;
-        }
-
-        const res = await API.post(`/api/demo/step/${stepNumber}`, {});
-        if (resBox) {
-            resBox.innerHTML = `
-                <div class="text-emerald-400 font-bold mb-1"><i class="fas fa-check-circle mr-1"></i> Step ${stepNumber} Succeeded</div>
-                <div class="text-slate-300">${JSON.stringify(res, null, 2)}</div>
-            `;
-        }
-        if (res.incident_id) {
-            activeIncidentId = res.incident_id;
-            await loadIncidents(false);
-            selectIncident(res.incident_id);
-        }
-    } catch (err) {
-        alert('Demo step error: ' + err.message);
-    }
-}
-
-async function startAutoDemo() {
-    let current = 1;
-    const autoBtn = document.getElementById('btn-auto-demo');
-    if (autoBtn) autoBtn.disabled = true;
-
-    for (let i = 1; i <= 7; i++) {
-        await runDemoStep(i);
-        // Wait 3 seconds between steps
-        await new Promise(r => setTimeout(r, 2800));
-    }
-    if (autoBtn) autoBtn.disabled = false;
-    alert('3-Minute Demonstration sequence fully executed!');
-}
-
-// ----------------- 10 Required Test Scenarios Runner -----------------
-async function loadScenarios() {
-    try {
-        const scenarios = await API.get('/api/scenarios');
-        const container = document.getElementById('scenarios-container');
-        if (!container) return;
-        container.innerHTML = '';
-
-        scenarios.forEach(s => {
-            const card = document.createElement('div');
-            card.id = `scenario-card-${s.id}`;
-            card.className = 'p-4 resq-card border border-slate-800 rounded-lg flex flex-col gap-2';
-
-            card.innerHTML = `
-                <div class="flex items-center justify-between">
-                    <span class="font-mono text-xs font-bold text-slate-400">${s.id}</span>
-                    <span id="badge-${s.id}" class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-800 text-slate-400">NOT RUN</span>
-                </div>
-                <div class="text-sm font-bold text-slate-100">${s.title}</div>
-                <div class="text-xs text-slate-400">${s.description}</div>
-                ${s.input_text ? `<div class="text-xs text-cyan-300 font-mono bg-slate-900 p-2 rounded border border-slate-800">"${s.input_text}"</div>` : ''}
-                <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-800">
-                    <button onclick="runSingleScenario('${s.id}')" class="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-semibold">Run Test</button>
-                    <div id="result-${s.id}" class="text-xs text-slate-400 font-mono"></div>
-                </div>
-            `;
-            container.appendChild(card);
-        });
-    } catch (err) {
-        console.error('Failed to load scenarios:', err);
-    }
-}
-
-async function runSingleScenario(scenarioId) {
-    const badge = document.getElementById(`badge-${scenarioId}`);
-    const resBox = document.getElementById(`result-${scenarioId}`);
-    if (badge) {
-        badge.className = 'px-2 py-0.5 rounded text-xs font-semibold bg-amber-900/60 text-amber-300';
-        badge.innerText = 'RUNNING...';
-    }
-
-    try {
-        const res = await API.post(`/api/scenarios/run/${scenarioId}`);
-        if (badge) {
-            badge.className = res.passed ? 'badge-verified font-bold' : 'badge-critical font-bold';
-            badge.innerText = res.passed ? 'PASSED (100%)' : 'FAILED';
-        }
-        if (resBox) resBox.innerText = res.details || res.error || '';
-    } catch (err) {
-        if (badge) {
-            badge.className = 'badge-critical font-bold';
-            badge.innerText = 'ERROR';
-        }
-    }
-}
-
-async function runAllTestScenarios() {
-    const runAllBtn = document.getElementById('btn-run-all-scenarios');
-    if (runAllBtn) runAllBtn.disabled = true;
-
-    try {
-        const res = await API.post('/api/scenarios/run-all');
-        const summaryEl = document.getElementById('scenarios-summary');
-        if (summaryEl) {
-            summaryEl.innerHTML = `
-                <div class="p-3 bg-emerald-950/60 border border-emerald-500 text-emerald-300 rounded-lg text-sm font-bold flex items-center justify-between">
-                    <span><i class="fas fa-check-double mr-2"></i> All ${res.total_scenarios} Scenarios Executed</span>
-                    <span>Passed: ${res.total_passed}/${res.total_scenarios} (${res.pass_rate_pct}%)</span>
-                </div>
-            `;
-        }
-        res.results.forEach(r => {
-            const badge = document.getElementById(`badge-${r.scenario_id}`);
-            const resBox = document.getElementById(`result-${r.scenario_id}`);
-            if (badge) {
-                badge.className = r.passed ? 'badge-verified font-bold' : 'badge-critical font-bold';
-                badge.innerText = r.passed ? 'PASSED (100%)' : 'FAILED';
-            }
-            if (resBox) resBox.innerText = r.details || r.error || '';
-        });
-    } catch (err) {
-        alert('Error running all scenarios: ' + err.message);
-    } finally {
-        if (runAllBtn) runAllBtn.disabled = false;
-    }
-}
-
-// ----------------- Baseline Evaluation & Benchmarks -----------------
-async function loadBenchmarks() {
-    try {
-        const data = await API.get('/api/evaluation/benchmarks');
-        const tbody = document.getElementById('benchmarks-tbody');
-        if (tbody) {
-            tbody.innerHTML = '';
-            data.metrics.forEach(m => {
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-slate-800 text-xs';
-                tr.innerHTML = `
-                    <td class="py-3 px-4 font-semibold text-slate-200">${m.metric}</td>
-                    <td class="py-3 px-4 text-cyan-400 font-mono">${m.proposed_target}</td>
-                    <td class="py-3 px-4 text-slate-400">${m.baseline_a}</td>
-                    <td class="py-3 px-4 text-slate-400">${m.baseline_b}</td>
-                    <td class="py-3 px-4 font-bold text-emerald-400 bg-emerald-950/20">${m.resq_4}</td>
-                    <td class="py-3 px-4"><span class="badge-verified px-2 py-0.5 rounded text-[11px] font-bold">${m.status}</span></td>
-                `;
-                tbody.appendChild(tr);
-            });
-        }
-
-        const fbody = document.getElementById('features-tbody');
-        if (fbody) {
-            fbody.innerHTML = '';
-            data.feature_matrix.forEach(f => {
-                const tr = document.createElement('tr');
-                tr.className = 'border-b border-slate-800 text-xs';
-                tr.innerHTML = `
-                    <td class="py-3 px-4 font-bold text-slate-300">${f.feature}</td>
-                    <td class="py-3 px-4 text-slate-400">${f.baseline_a}</td>
-                    <td class="py-3 px-4 text-slate-400">${f.baseline_b}</td>
-                    <td class="py-3 px-4 text-cyan-300 font-semibold bg-cyan-950/20">${f.resq_4}</td>
-                `;
-                fbody.appendChild(tr);
-            });
-        }
-    } catch (err) {
-        console.error('Failed to load benchmarks:', err);
     }
 }
