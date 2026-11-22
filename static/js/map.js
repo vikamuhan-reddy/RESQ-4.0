@@ -40,6 +40,7 @@ class IncidentMapController {
         if (this.incidentMarker) this.map.removeLayer(this.incidentMarker);
         if (this.uncertaintyCircle) this.map.removeLayer(this.uncertaintyCircle);
         if (this.separationLine) this.map.removeLayer(this.separationLine);
+        this.callerMarker = this.incidentMarker = this.uncertaintyCircle = this.separationLine = null;  // no stale references
 
         const bounds = [];
 
@@ -75,14 +76,20 @@ class IncidentMapController {
                 iconAnchor: [11, 11]
             });
             this.incidentMarker = L.marker([incident.latitude, incident.longitude], { icon: incidentIcon }).addTo(this.map);
-            this.incidentMarker.bindPopup(`
-                <div style="color: #0f172a; font-family: sans-serif; font-size: 12px;">
-                    <strong style="color: ${color};">INCIDENT LOCATION</strong><br>
-                    <strong>Desc:</strong> ${esc(incident.description)}<br>
-                    <strong>Status:</strong> ${esc(incident.verification_status)}<br>
-                    <strong>Precision:</strong> ${esc(incident.precision)}
-                </div>
-            `);
+            if (isUncertain && this.onConfirm) {
+                // Suggested by map search: one click confirms it
+                this.incidentMarker.bindPopup(this._confirmPopup(`SUGGESTED, not confirmed: ${incident.description}`,
+                    () => this.onConfirm(incident.latitude, incident.longitude, incident.description)));
+            } else {
+                this.incidentMarker.bindPopup(`
+                    <div style="color: #0f172a; font-family: sans-serif; font-size: 12px;">
+                        <strong style="color: ${color};">INCIDENT LOCATION</strong><br>
+                        <strong>Desc:</strong> ${esc(incident.description)}<br>
+                        <strong>Status:</strong> ${esc(incident.verification_status)}<br>
+                        <strong>Precision:</strong> ${esc(incident.precision)}
+                    </div>
+                `);
+            }
             bounds.push([incident.latitude, incident.longitude]);
 
             // Draw uncertainty radius circle if status is UNCERTAIN
@@ -112,12 +119,13 @@ class IncidentMapController {
 
         // Say why there is no pin, instead of leaving an empty map
         const notice = document.getElementById('map-notice');
-        if (notice) {
-            const unpinned = incident && !(incident.latitude && incident.longitude);
-            notice.classList.toggle('hidden', !unpinned);
-            notice.textContent = unpinned
-                ? `No pin yet: "${incident.description}" is the caller's description. Use "Find on map" or click the map to confirm it.`
-                : '';
+        if (notice && incident) {
+            const pinned = incident.latitude && incident.longitude;
+            const verified = incident.verification_status === 'INDEPENDENTLY_VERIFIED';
+            notice.classList.toggle('hidden', pinned && verified);
+            notice.textContent = !pinned
+                ? `No pin yet: "${incident.description}" is the caller's description. Use "Find on map" or click the map.`
+                : `Amber pin = SUGGESTED by map search for "${incident.description}", not confirmed. Click it to confirm, or click the right spot.`;
         }
     }
 
@@ -141,6 +149,7 @@ class IncidentMapController {
     // Clicking anywhere on the map offers to confirm that exact point
     enablePickOnClick(onConfirm) {
         if (!this.map) return;
+        this.onConfirm = onConfirm;  // also used by the suggested pin's popup
         this.map.on('click', (e) => {
             const label = `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`;
             L.popup().setLatLng(e.latlng)

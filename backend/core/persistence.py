@@ -7,7 +7,7 @@ import sqlite3
 import json
 import os
 import threading
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from backend.models.incident import IncidentRecord, TimelineEvent, CoordinationAction
@@ -81,7 +81,22 @@ class PersistenceEngine:
                 FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
             );
             """)
-            
+
+            # The call itself, turn by turn: what the caller said and what RESQ asked
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS call_turns (
+                turn_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                speaker TEXT NOT NULL CHECK (speaker IN ('caller', 'resq')),
+                text TEXT NOT NULL,
+                language TEXT,
+                detail TEXT,
+                FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_call_turns_incident ON call_turns(incident_id, turn_id);")
+
             conn.commit()
 
     def save_incident(self, incident: IncidentRecord) -> IncidentRecord:
@@ -230,6 +245,22 @@ class PersistenceEngine:
                 if row:
                     return CoordinationAction.model_validate_json(row["data_json"])
             return None
+
+    def add_turn(self, incident_id: str, speaker: str, text: str, language: Optional[str] = None, detail: Optional[str] = None):
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO call_turns (incident_id, timestamp, speaker, text, language, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                (incident_id, datetime.utcnow().isoformat(), speaker, text, language, detail),
+            )
+            conn.commit()
+
+    def get_turns(self, incident_id: str) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT turn_id, timestamp, speaker, text, language, detail FROM call_turns WHERE incident_id = ? ORDER BY turn_id",
+                (incident_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def restore_cache_from_disk(self):
         """Restores in-memory session cache from durable SQLite on boot/restart."""

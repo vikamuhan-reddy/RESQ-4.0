@@ -6,6 +6,7 @@
 
 let currentIncidents = [];
 let activeIncidentId = null;
+let callIncidentId = null;  // the call this screen is taking; intake goes here, not to whatever is selected
 let activeTab = 'queue';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -19,6 +20,42 @@ function initApp() {
     mapController.init();
     mapController.enablePickOnClick(confirmLocation);
     injectSimulationBanner();
+    renderCallTarget();
+}
+
+function renderCallTarget() {
+    const el = document.getElementById('call-target');
+    if (!el) return;
+    if (!callIncidentId) {
+        el.innerHTML = '<span class="text-slate-400">Next statement starts a new call</span>';
+        return;
+    }
+    el.innerHTML = `<span class="text-emerald-300">● Live call ${esc(callIncidentId)}</span> <button id="btn-end-call" class="ml-1 text-red-300 underline">End call</button>`;
+    document.getElementById('btn-end-call').onclick = () => { callIncidentId = null; renderCallTarget(); };
+}
+
+function continueCall() {
+    if (!activeIncidentId) return alert('Select an incident first.');
+    callIncidentId = activeIncidentId;
+    renderCallTarget();
+    showVoiceStatus(`New statements now go to ${activeIncidentId}.`, 'info');
+}
+
+async function loadConversation(incidentId) {
+    const box = document.getElementById('conversation');
+    if (!box) return;
+    try {
+        const turns = await API.get(`/api/incidents/${incidentId}/conversation`);
+        box.innerHTML = turns.length ? turns.map(t => {
+            const time = parseUtc(t.timestamp).toLocaleTimeString();
+            return t.speaker === 'caller'
+                ? `<div class="flex"><div class="max-w-[85%] px-3 py-1.5 rounded-xl rounded-bl-sm bg-slate-800 text-slate-100"><span class="block text-[10px] font-mono text-slate-400">CALLER · ${time}</span>${esc(t.text)}</div></div>`
+                : `<div class="flex justify-end"><div class="max-w-[85%] px-3 py-1.5 rounded-xl rounded-br-sm bg-cyan-950 border border-cyan-800 text-cyan-100"><span class="block text-[10px] font-mono text-cyan-400">RESQ ASKED · ${time}</span>${esc(t.text)}</div></div>`;
+        }).join('') : '<div class="text-slate-500 text-xs italic">No conversation yet. Speak or type to start the call.</div>';
+        box.scrollTop = box.scrollHeight;
+    } catch (err) {
+        console.error('Failed to load conversation:', err);
+    }
 }
 
 // Server timestamps are UTC without a "Z"; without this, browsers read them as local time
@@ -125,17 +162,24 @@ function setupEventListeners() {
             const input = document.getElementById('voice-transcript-input');
             const lang = document.getElementById('voice-lang-select').value;
             if (!input || !input.value.trim()) return alert('Please enter or record an emergency utterance.');
-            if (!activeIncidentId) return alert('Please select an active incident from the queue.');
 
             submitIntakeBtn.disabled = true;
             showVoiceStatus('Understanding the call…', 'info');
             try {
-                const inc = await API.post(`/api/incidents/${activeIncidentId}/voice-intake`, {
+                // Statements go to this screen's live call, never to whichever incident happens to be selected
+                if (!callIncidentId) {
+                    const created = await API.post('/api/incidents', { category: 'Other Emergency', language: lang });
+                    callIncidentId = created.incident_id;
+                    renderCallTarget();
+                }
+                const inc = await API.post(`/api/incidents/${callIncidentId}/voice-intake`, {
                     transcript: input.value.trim(),
                     language: lang
                 });
                 input.value = '';
-                await selectIncident(activeIncidentId);
+                activeIncidentId = callIncidentId;
+                switchTab('detail');
+                await selectIncident(callIncidentId);
                 askCaller(inc.follow_up_queue && inc.follow_up_queue[0]);
             } catch (err) {
                 alert('Error submitting intake: ' + err.message);
@@ -352,6 +396,7 @@ function renderIncidentDetail(inc) {
 
     // Timeline Audit Trail
     loadTimeline(inc.incident_id);
+    loadConversation(inc.incident_id);
 
     renderDispatchTimer(inc);
 }
@@ -542,10 +587,11 @@ function renderCoordinationActions(actions) {
             <div class="flex items-center justify-between pt-2 border-t border-slate-800">
                 <span class="text-xs text-slate-400">Human Approval: <strong>${isApproved ? 'Approved by ' + esc(a.operator_id) : 'PENDING'}</strong></span>
                 <div class="flex gap-2">
-                    ${canApprove ? `<button onclick="approveAction('${a.action_id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">${a.status === 'FAILED' ? 'Retry Dispatch' : 'Authorize Dispatch'}</button>` : ''}
+                    ${canApprove ? `<button onclick="approveAction('${a.action_id}')" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold">${a.status === 'FAILED' ? 'Retry Dispatch' : 'Confirm Dispatch'}</button>` : ''}
                     ${a.status === 'SENT' ? `<button onclick="simulateAgencyAck('${a.action_id}')" class="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded text-xs font-semibold">Simulate ACK</button>` : ''}
                 </div>
             </div>
+            ${a.pre_alert_note ? `<div class="text-xs text-amber-300/90">Pre-alert: ${esc(a.pre_alert_note)}</div>` : ''}
             ${a.delivery_note ? `<div class="text-xs ${a.status === 'FAILED' ? 'text-red-300' : 'text-slate-400'}">${esc(a.delivery_note)}</div>` : ''}
         `;
         list.appendChild(item);
@@ -672,9 +718,12 @@ async function simulateCallerDisconnect() {
     }
 }
 
-async function createNewIncident(category = 'Road Accident', lang = 'en') {
+async function createNewIncident(category = 'Other Emergency', lang = null) {
+    lang = lang || document.getElementById('voice-lang-select').value;
     try {
         const inc = await API.post('/api/incidents', { category, language: lang });
+        callIncidentId = inc.incident_id;  // a new incident is a new call
+        renderCallTarget();
         await loadIncidents();
         selectIncident(inc.incident_id);
     } catch (err) {

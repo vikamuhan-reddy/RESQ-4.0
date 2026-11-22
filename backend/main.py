@@ -10,8 +10,9 @@ except ImportError:
     pass
 import os
 import asyncio
+import importlib
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,12 +24,13 @@ from pydantic import BaseModel, Field
 from backend.core.persistence import db_engine
 from backend.core.orchestrator import orchestrator, NotFound, Conflict
 from backend.agents.voice_agent import voice_agent
-from backend.agents.reasoning_agent import reasoning_agent
+from backend.agents.reasoning_agent import reasoning_agent, place_words
 from backend.agents.coordination_agent import coordination_agent
-from backend.services.gemini_service import transcribe_audio as gemini_transcribe
+from backend.services.gemini_service import transcribe_audio as gemini_transcribe, warm_up as gemini_warm_up
 from backend.services.geocoding_service import find_candidates
 from backend.services import dispatch_service
-from backend.models.enums import VerificationStatus
+from backend.models.enums import VerificationStatus, ActionStatus
+from backend.models.incident import TimelineEvent
 
 app = FastAPI(
     title="RESQ 4.0 Emergency Intelligence Platform",
@@ -74,6 +76,59 @@ async def broadcast_event(event_type: str, data: Dict[str, Any]):
             dead_subscribers.add(queue)
     for dead in dead_subscribers:
         sse_subscribers.remove(dead)
+
+# Background work (pre-alerts) runs after the response so the operator isn't kept waiting
+_background_tasks = set()
+
+def _spawn(coro):
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)  # keep a reference so the task isn't garbage-collected mid-flight
+    task.add_done_callback(_background_tasks.discard)
+
+async def _after_intake(incident_id: str, action_ids: List[str]):
+    """
+    Slow follow-ups run after the reply so the operator isn't kept waiting: the map suggestion (~3 s on
+    Nominatim), then pre-alerts, which therefore already carry the suggested map link.
+    """
+    try:
+        inc = orchestrator.get_incident(incident_id)
+        if await _suggest_location(inc):
+            await broadcast_event("LOCATION_SUGGESTED", inc.model_dump())
+        for action_id in action_ids:
+            await orchestrator.pre_alert(incident_id, action_id)
+        if action_ids:
+            await broadcast_event("PRE_ALERT", db_engine.get_incident(incident_id).model_dump())
+    except Exception as e:
+        print(f"[after-intake] {incident_id}: {type(e).__name__}: {e}")
+
+NOMINATIM_GAP_S = 1.1  # Nominatim usage policy: at most 1 request per second
+
+async def _suggest_location(inc) -> bool:
+    """
+    Look up the spoken place and show it as a SUGGESTED (unconfirmed) pin. Returns True if the pin changed.
+    Detailed descriptions ("US Consulate, Gemini Flyover") often have no exact map match, so simpler parts are tried too.
+    """
+    loc = inc.locations.incident_location
+    query = loc.search_query
+    if loc.verification_status != VerificationStatus.UNCERTAIN or not query or loc.suggested_for == query:
+        return False  # confirmed, nothing to search, or already suggested for this place
+    parts = [p.strip() for p in query.split(",") if p.strip() and p.strip().lower() not in ("chennai", "tamil nadu", "india")]
+    match = None
+    for i, attempt in enumerate(list(dict.fromkeys([query] + parts))[:3]):
+        if i:
+            await asyncio.sleep(NOMINATIM_GAP_S)
+        try:
+            candidates = await find_candidates(attempt, limit=1)
+        except Exception:
+            return False  # the map is a convenience; the call carries on without it
+        if candidates:
+            match = candidates[0]
+            break
+    # No match, but still clearly the same place as the current pin (a refinement): keep the pin.
+    # A different place with no match (a correction) clears it rather than leaving it somewhere wrong.
+    keep = match is None and loc.latitude is not None and bool(place_words(query) & place_words(loc.suggested_for))
+    orchestrator.suggest_incident_location(inc, query, match, keep_existing=keep)
+    return True
 
 # Request Models
 class CreateIncidentRequest(BaseModel):
@@ -219,15 +274,21 @@ async def process_voice_intake(incident_id: str, req: VoiceIntakeRequest):
     
     # Run Voice Agent
     inc = await voice_agent.process_utterance(inc, req.transcript, req.language, req.audio_url)
-    
+
     # Run Incident Reasoning Agent
     inc = reasoning_agent.evaluate_incident(inc)
 
-    # Route by rules; proposals wait for operator approval
-    coordination_agent.auto_propose(inc)
+    # Route by rules. Map suggestion and pre-alerts follow in the background; the operator confirms the dispatch
+    new_actions = coordination_agent.auto_propose(inc)
+    _spawn(_after_intake(incident_id, [a.action_id for a in new_actions]))
 
     await broadcast_event("INCIDENT_UPDATED", inc.model_dump())
     return inc
+
+@app.get("/api/incidents/{incident_id}/conversation")
+async def get_conversation(incident_id: str):
+    orchestrator.get_incident(incident_id)  # 404 if unknown
+    return db_engine.get_turns(incident_id)
 
 @app.post("/api/incidents/{incident_id}/disconnect")
 async def simulate_disconnect(incident_id: str, req: DisconnectRequest):
@@ -265,6 +326,8 @@ async def propose_coordination_action(incident_id: str, req: ProposeActionReques
         target_agency=req.target_agency,
         custom_idempotency_key=req.idempotency_key
     )
+    if action.status == ActionStatus.CREATED and not action.pre_alert_note:
+        _spawn(_after_intake(incident_id, [action.action_id]))
     updated_inc = db_engine.get_incident(incident_id)
     await broadcast_event("ACTION_PROPOSED", updated_inc.model_dump())
     return action
@@ -321,6 +384,18 @@ async def caller_location(incident_id: str, req: CallerLocationRequest):
 async def merge_into(incident_id: str, req: MergeRequest):
     """Operator marks this report as the same emergency as target_id (never automatic)."""
     dup = orchestrator.merge_incident(incident_id, req.target_id, req.operator_id)
+    # Departments that got a pre-alert for this report are told it is no longer needed
+    for act in dup.coordination_actions:
+        if act.status == ActionStatus.CANCELLED and act.pre_alert_message_id:
+            ok, note = await dispatch_service.send_note(
+                act, f"CANCELLED (SIMULATION): {act.target_agency} is not needed for {incident_id}; "
+                     f"it is the same emergency as {req.target_id}."
+            )
+            db_engine.log_event(TimelineEvent(
+                incident_id=incident_id, event_type="PRE_ALERT_CANCELLED", actor="Dispatch Service",
+                summary=f"{act.target_agency}: cancellation {'sent' if ok else 'not sent (' + note + ')'}",
+                details={"action_id": act.action_id}, is_failure_event=not ok
+            ))
     await broadcast_event("INCIDENT_MERGED", dup.model_dump())
     return dup
 
@@ -375,6 +450,10 @@ async def _on_telegram_ack(incident_id: str, action_id: str, who: str) -> str:
 @app.on_event("startup")
 async def startup_event():
     app.state.telegram_ack_task = asyncio.create_task(dispatch_service.poll_acknowledgements(_on_telegram_ack))
+    # Load the Gemini SDK and open its connection now, not during the first live call
+    if os.getenv("GEMINI_API_KEY"):
+        await asyncio.to_thread(importlib.import_module, "google.genai")
+        _spawn(gemini_warm_up())
 
 @app.on_event("shutdown")
 async def shutdown_event():

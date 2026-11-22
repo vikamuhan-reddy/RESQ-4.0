@@ -82,10 +82,11 @@ class VoiceIntelligenceAgent:
             incident.audio_reference_url = audio_url
         now = datetime.utcnow().isoformat()
         transcript = incident.raw_transcript
+        db_engine.add_turn(incident.incident_id, "caller", raw_text.strip(), language)
 
         extraction = None
         try:
-            extraction = await extract_incident_data(transcript)
+            extraction = await extract_incident_data(self._conversation(incident.incident_id))
         except Exception as e:
             # Real AI failure: log it, flag the incident for the operator, carry on with keyword rules
             orchestrator.handle_ai_service_failure(incident, "Gemini extraction", f"{type(e).__name__}: {e}")
@@ -102,6 +103,9 @@ class VoiceIntelligenceAgent:
             orchestrator.advance(incident, IncidentState.INFORMATION_GATHERING, "Voice Intelligence Agent", "First caller statement processed")
 
         db_engine.save_incident(incident)
+        if incident.follow_up_queue:
+            q = incident.follow_up_queue[0]
+            db_engine.add_turn(incident.incident_id, "resq", q.question_text, q.language, q.rationale)
 
         db_engine.log_event(TimelineEvent(
             incident_id=incident.incident_id,
@@ -123,6 +127,12 @@ class VoiceIntelligenceAgent:
         return incident
 
     # ── Gemini path ──────────────────────────────────────────────────────────
+
+    def _conversation(self, incident_id: str) -> str:
+        """The call so far with speakers labelled, so Gemini knows which questions were already asked."""
+        return "\n".join(
+            f"{'Caller' if t['speaker'] == 'caller' else 'RESQ asked'}: {t['text']}" for t in db_engine.get_turns(incident_id)
+        )
 
     def _apply_extraction(self, incident: IncidentRecord, e: Extraction, transcript: str, now: str):
         incident.category = IncidentCategory(e.category)
@@ -153,6 +163,7 @@ class VoiceIntelligenceAgent:
 
         loc = incident.locations
         if loc.incident_location.verification_status != VerificationStatus.INDEPENDENTLY_VERIFIED:
+            prev = loc.incident_location
             if e.incident_location_text:
                 loc.incident_location = LocationRecord(
                     description=e.incident_location_text,
@@ -164,6 +175,11 @@ class VoiceIntelligenceAgent:
                     notes="From the caller's description. Not geocoded; confirm before dispatch.",
                     search_query=e.location_search_query
                 )
+                if prev.latitude is not None:
+                    # Keep the current suggested pin; the background lookup moves or clears it if the place changed
+                    new = loc.incident_location
+                    new.latitude, new.longitude, new.precision, new.notes = prev.latitude, prev.longitude, prev.precision, prev.notes
+                    new.suggested_for = prev.suggested_for
             else:
                 loc.incident_location = LocationRecord(
                     description="Location not given yet",

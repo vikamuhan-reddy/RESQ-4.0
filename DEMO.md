@@ -21,11 +21,11 @@
 |---|---|---|
 | 0:00–0:20 | Dashboard visible | "112 gives India one emergency number. But the person answering still has to understand a panicking caller, often in Tamil, get the location right, and forward it to the right department. That's where details get lost. RESQ is a co-pilot for that call-taker." |
 | 0:20–0:50 | **Caller screen:** tap **Call 112** (Tamil selected). Tap the mic and say, or type: *"Anna, Gemini flyover kitta accident aayiduchu, rendu peru ku blood varudhu, naan bus la irukken"*. Tap again to send. | "A caller on a bus sees an accident and speaks Tamil-English." |
-| 0:50–1:10 | Point at the dashboard: category, injuries, caller **not at the scene**, location in the caller's words, Ambulance + Traffic Police proposed. The Tamil question is spoken on the caller screen. | "In about two seconds it understood: road accident, two bleeding, and the caller is *not* at the scene; he's on a bus. It asks the next question in Tamil. Rules, not AI, pick the departments." |
-| 1:10–1:30 | Dashboard detail tab: **Find on map**, then click the grey marker, then **Confirm**. | "We never put a guessed pin on the map. The operator confirms the place. Only now is there a pin." |
-| 1:30–1:55 | Click **Authorize Dispatch** on the Ambulance card. The phone buzzes; the teammate shows it and taps **Acknowledge**. | "A human approves. The ambulance team gets the message with the map link, and acknowledges from their phone." The card and the caller screen both flip to *acknowledged*. Point at the timer: "Department notified in under a minute." |
+| 0:50–1:10 | Point at the dashboard: category, injuries, caller **not at the scene**, the conversation panel, Ambulance + Traffic Police proposed. The Tamil question is spoken on the caller screen. **The phone buzzes: a PRE-ALERT.** | "In about three seconds it understood: road accident, two bleeding, and the caller is *not* at the scene; he's on a bus. It asks the next question in Tamil. Rules, not AI, pick the departments, and the ambulance team already has a pre-alert." |
+| 1:10–1:30 | The **amber pin** has appeared on Gemini Flyover by itself. Click it, then **Confirm incident location here**. It turns red. | "It found the place on the map by itself, but marks it as a suggestion. One click from the operator confirms it." |
+| 1:30–1:55 | Click **Confirm Dispatch** on the Ambulance card. The phone buzzes again with the **CONFIRMED DISPATCH** (a reply to the pre-alert, with a map link). The teammate taps **Acknowledge**. | "A human confirms. The ambulance team gets the confirmed dispatch with the exact location, and acknowledges from their phone." The card and the caller screen both flip to *acknowledged*. Point at the timer: "Department notified in under a minute." |
 | 1:55–2:20 | Caller screen: tap **Hang up**, then **New call**, then switch to English and type: *"There's a fire in a shop near Koyambedu market and one man has burns on his arm"*. | "One call, two departments: fire *and* ambulance, because someone is hurt." |
-| 2:20–2:40 | New call, Tamil: *"Gemini flyover signal la accident, oru car um bike um, naan auto la irukken"*. Dashboard: **Possible duplicate reports** shows the first call; click **Same emergency: merge**. | "A second person reports the same accident. RESQ flags it, and the operator merges it, which cancels its pending dispatches, so the same accident isn't dispatched twice." |
+| 2:20–2:40 | New call, Tamil: *"Gemini flyover signal la accident, oru car um bike um, naan auto la irukken"*. Dashboard: **Possible duplicate reports** shows the first call; click **Same emergency: merge**. | "A second person reports the same accident. RESQ flags it, and the operator merges it: its pending dispatches are cancelled and the department gets a CANCELLED note, so the same accident isn't dispatched twice." |
 | 2:40–3:00 | Scroll to the README's evaluation table, or a slide of it. | "On 30 test calls we wrote in Tamil, English and mixed, it routed every one correctly, against 53% for keyword rules. It's a small synthetic set, and real call recordings are our next step. If the AI fails, the incident is flagged and keyword rules take over, so nothing is lost." |
 
 ## If something breaks on stage
@@ -36,6 +36,8 @@
 | No Tamil voice | Read the question aloud: "In a real call system this is spoken to the caller." |
 | Mic not picking up | Type the same sentence in the caller screen's text box. |
 | Telegram slow, or teammate misses the tap | Click **Simulate ACK** on the dashboard card. |
+| No amber pin appears | The place had no map match: click **Find on map**, or click the right spot on the map. |
+| Typing on the dashboard instead of the caller screen | Fine: the statement box starts a **new call** ("● Live call …"). Click **End call** before the next caller. |
 | No internet at all | Play the backup video. |
 
 ## Likely questions

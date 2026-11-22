@@ -49,7 +49,8 @@ class LocationRecord(BaseModel):
     verification_status: VerificationStatus = VerificationStatus.CALLER_REPORTED
     confidence: float = 0.5
     notes: Optional[str] = None
-    search_query: Optional[str] = None  # clean place name for "Find on map"; never auto-pinned
+    search_query: Optional[str] = None  # clean place name for "Find on map" and the suggested pin
+    suggested_for: Optional[str] = None  # the search_query the current suggested pin came from
 
 class DualLocation(BaseModel):
     caller_location: LocationRecord
@@ -85,6 +86,8 @@ class CoordinationAction(BaseModel):
     operator_id: Optional[str] = None
     acknowledgment_reference: Optional[str] = None
     delivery_note: Optional[str] = None  # what happened when we tried to deliver it (shown to the operator)
+    pre_alert_note: Optional[str] = None  # automatic heads-up sent when the call was routed
+    pre_alert_message_id: Optional[int] = None  # the confirmed dispatch replies to this Telegram message
     is_simulation: bool = True  # Always True until real dispatch integration is wired
     dispatch_mode: str = "simulation"  # "simulation" | "live"
 

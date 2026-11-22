@@ -23,9 +23,13 @@ GENERIC_PLACE_WORDS = {
 }
 
 
+def place_words(text: str) -> Set[str]:
+    """Distinctive words in a place description ('gemini', 'koyambedu'), without generic ones ('road', 'near')."""
+    return {t for t in re.split(r"[\s,./()\-]+", (text or "").lower()) if len(t) >= 3 and t not in GENERIC_PLACE_WORDS}
+
+
 def place_tokens(loc: LocationRecord) -> Set[str]:
-    text = f"{loc.search_query or ''} {loc.description or ''}".lower()
-    return {t for t in re.split(r"[\s,./()\-]+", text) if len(t) >= 3 and t not in GENERIC_PLACE_WORDS}
+    return place_words(f"{loc.search_query or ''} {loc.description or ''}")
 
 def haversine_distance_km(lat1, lon1, lat2, lon2) -> float:
     if None in (lat1, lon1, lat2, lon2):

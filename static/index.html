@@ -36,7 +36,7 @@
             <a href="/caller" target="_blank" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
                 <i class="fas fa-mobile-screen"></i> Caller screen
             </a>
-            <button onclick="createNewIncident('Road Accident', 'ta')" class="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold shadow-md shadow-cyan-900/30 flex items-center gap-1.5 transition">
+            <button onclick="createNewIncident()" class="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold shadow-md shadow-cyan-900/30 flex items-center gap-1.5 transition">
                 <i class="fas fa-plus"></i> New Incident
             </button>
         </div>
@@ -71,6 +71,7 @@
                 <button id="btn-submit-intake" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-800/60 rounded-lg text-xs font-bold shrink-0 transition">
                     <i class="fas fa-paper-plane mr-1"></i> Submit Intake
                 </button>
+                <span id="call-target" class="shrink-0 text-[11px] font-mono"></span>
             </div>
 
             <!-- Sample Utterance Chips -->
@@ -118,10 +119,10 @@
                     <p class="text-xs text-slate-400">Real-time incident stream with connection integrity and location verification status.</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <button onclick="createNewIncident('Road Accident', 'ta')" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-xs font-bold">
+                    <button onclick="createNewIncident('Other Emergency', 'ta')" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-xs font-bold">
                         <i class="fas fa-plus mr-1"></i> Tamil Intake
                     </button>
-                    <button onclick="createNewIncident('Fire Hazard', 'en')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold">
+                    <button onclick="createNewIncident('Other Emergency', 'en')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold">
                         <i class="fas fa-plus mr-1"></i> English Intake
                     </button>
                 </div>
@@ -168,6 +169,9 @@
 
                 <!-- Operator Actions Bar -->
                 <div class="flex flex-wrap items-center gap-2">
+                    <button onclick="continueCall()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition" title="Send the next statements to this incident (e.g. a callback)">
+                        <i class="fas fa-phone-volume"></i> Continue this call
+                    </button>
                     <button onclick="acknowledgeCurrentIncident()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition">
                         <i class="fas fa-check"></i> Acknowledge
                     </button>
@@ -197,6 +201,18 @@
                         <i class="fas fa-phone-slash mr-1"></i> Disconnect Caller
                     </button>
                 </div>
+            </div>
+
+            <!-- The call itself, turn by turn (stored in the call_turns table) -->
+            <div class="resq-card p-4 space-y-2">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <i class="fas fa-comments text-cyan-400"></i>
+                        <h3 class="font-bold text-sm text-slate-100">Call conversation</h3>
+                    </div>
+                    <span class="text-[10px] font-mono text-slate-500">every turn is stored</span>
+                </div>
+                <div id="conversation" class="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-sm"></div>
             </div>
 
             <!-- Dual-Location Intelligence & Leaflet Map Grid -->

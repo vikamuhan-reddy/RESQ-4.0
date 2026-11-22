@@ -20,13 +20,14 @@ The person answering an emergency call has to understand a panicking caller, oft
 |---|---|
 | Gemini understands Tamil, English and mixed calls, re-reading the whole conversation each turn | Map search covers Chennai only (set `GEOCODE_VIEWBOX` for another city) |
 | Real AI failures (timeout, overload, bad key, no network) are logged, flagged for review, and fall back to keyword rules | No login or roles |
-| Rules decide the departments; a human approves every dispatch | Telegram stands in for real department systems; **no real agency is contacted** |
+| Rules decide the departments; each gets an automatic **pre-alert**, and a human confirms every dispatch | Telegram stands in for real department systems; **no real agency is contacted** |
 | A dispatch counts as sent only when Telegram confirms delivery; failures are shown and can be retried | Audio transcription through Gemini is built but not yet tested with live microphone recordings (browser speech recognition is used today) |
 | The next question is spoken in the caller's language (needs a browser with a Tamil voice, e.g. Microsoft Edge) | Accuracy is measured on 30 team-written calls, not real call audio |
-| Locations stay in the caller's words until an operator confirms one on the map (search or click); only then is there a pin and a map link in the dispatch | |
+| The spoken place is looked up automatically and shown as an amber **suggested** pin; one operator click confirms it (red pin, map link in the dispatch) | |
 | Departments acknowledge from Telegram with one tap; the dashboard and caller screen update live | |
 | A second report of the same place within 15 minutes is flagged; the operator merges it and its pending dispatches are cancelled | |
 | Caller screen (`/caller`): call, speak or type, hear the next question, see help status; can share the device's location | The caller screen needs https or localhost for mic and location (fine on the demo laptop, not on a phone over plain Wi-Fi) |
+| Every caller sentence and every question RESQ asks is stored (`call_turns` table) and shown as a chat; Gemini sees what it already asked | |
 | On-screen timer from call start to first department notified | |
 | Enforced incident state machine, per-field provenance, operator corrections with history, SQLite persistence | |
 

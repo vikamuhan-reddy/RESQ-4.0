@@ -99,8 +99,9 @@ function render(inc) {
         return;
     }
     const items = (inc.coordination_actions || []).filter(a => STATUS_TEXT[a.status]);
+    const text = a => (a.status === 'CREATED' && a.pre_alert_note) ? 'alerted, getting ready' : STATUS_TEXT[a.status];
     if (items.length) {
-        $('help').innerHTML = items.map(a => `<li>${ICON[a.action_type] || '🆘'} ${esc(a.target_agency)}: <strong>${esc(STATUS_TEXT[a.status])}</strong></li>`).join('');
+        $('help').innerHTML = items.map(a => `<li>${ICON[a.action_type] || '🆘'} ${esc(a.target_agency)}: <strong>${esc(text(a))}</strong></li>`).join('');
     }
 }
 

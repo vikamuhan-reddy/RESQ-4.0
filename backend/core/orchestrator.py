@@ -202,6 +202,25 @@ class OrchestrationEngine:
         db_engine.log_event(evt)
         return incident
 
+    def suggest_incident_location(self, incident: IncidentRecord, query: str, match: Optional[Dict[str, Any]], keep_existing: bool = False) -> None:
+        """
+        A map-search guess for the spoken place: a SUGGESTED pin, still UNCERTAIN until an operator confirms.
+        No match: keep the current pin if the caller only refined the same place, otherwise clear it.
+        """
+        loc = incident.locations.incident_location
+        loc.suggested_for = query
+        if keep_existing:
+            pass
+        elif match:
+            loc.latitude, loc.longitude = match["lat"], match["lon"]
+            loc.precision = "Suggested by map search (not confirmed)"
+            loc.notes = f"Map search matched: {match['name']}. Confirm before relying on it."
+        else:
+            loc.latitude = loc.longitude = None
+            loc.precision = "Caller's words (no map match)"
+            loc.notes = f"No map match for '{query}'. Use Find on map or click the map."
+        db_engine.save_incident(incident)
+
     def confirm_incident_location(self, incident_id: str, lat: float, lon: float, operator_id: str, label: Optional[str] = None) -> IncidentRecord:
         """The only way an incident gets a map pin: an operator confirms the point."""
         incident = self.get_incident(incident_id)
@@ -379,8 +398,29 @@ class OrchestrationEngine:
 
     async def approve_and_dispatch(self, incident_id: str, action_id: str, operator_id: str = "Operator-1") -> CoordinationAction:
         action = self.operator_approve_action(incident_id, action_id, operator_id)
-        delivered, note = await dispatch_service.deliver(self.get_incident(incident_id), action)
+        delivered, note, _ = await dispatch_service.deliver(self.get_incident(incident_id), action)
         return self.record_delivery(incident_id, action_id, delivered, note)
+
+    async def pre_alert(self, incident_id: str, action_id: str) -> CoordinationAction:
+        """Heads-up to the department as soon as the call is routed. Not a dispatch: the operator still confirms."""
+        act = self._find_action(self.get_incident(incident_id), action_id)
+        if act.pre_alert_note or act.status != ActionStatus.CREATED:
+            return act
+        delivered, note, message_id = await dispatch_service.deliver(self.get_incident(incident_id), act, pre_alert=True)
+        incident = self.get_incident(incident_id)  # re-read: the operator may have acted while we were sending
+        act = self._find_action(incident, action_id)
+        act.pre_alert_note, act.pre_alert_message_id = note, message_id
+        db_engine.save_incident(incident)
+        db_engine.save_action(act)
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident_id,
+            event_type="PRE_ALERT_SENT" if delivered else "PRE_ALERT_FAILED",
+            actor="Dispatch Service",
+            summary=f"{act.target_agency}: {note}",
+            details={"action_id": action_id},
+            is_failure_event=not delivered
+        ))
+        return act
 
     def record_agency_acknowledgment(self, incident_id: str, action_id: str, responder_ref: str = "DISPATCH-UNIT-704") -> CoordinationAction:
         """

@@ -361,6 +361,111 @@ def test_caller_screen_and_device_location():
     assert inc.locations.is_separated  # words still tell us the caller is away from the scene
 
 
+def test_conversation_suggested_pin_and_pre_alert():
+    import backend.main as main_module
+    real_extract, real_find = voice_agent_module.extract_incident_data, main_module.find_candidates
+    seen_prompts, find_calls = [], []
+    fake = Extraction(
+        category="Road Accident", injuries="two bleeding", affected_count=2, hazards=[],
+        incident_location_text="Gemini flyover kitta", location_search_query="Gemini Flyover, Chennai",
+        caller_on_scene=False, caller_location_text="bus", urgency="HIGH", missing=["exact spot"],
+        next_question_en="Which side of the flyover?", next_question_ta="மேம்பாலத்தின் எந்தப் பக்கம்?", confidence=0.8,
+    )
+
+    async def fake_extract(conversation):
+        seen_prompts.append(conversation)
+        return fake
+
+    async def fake_find(query, limit=3):
+        find_calls.append(query)
+        if query == "US Consulate":
+            return [{"lat": 13.0525, "lon": 80.2511, "name": "US Consulate"}]
+        if "unmappable" in query or "Consulate" in query or "service road" in query:
+            return []
+        return [{"lat": 13.0516, "lon": 80.2503, "name": "Anna Flyover"}]
+
+    sent = []
+
+    def fake_telegram(request):
+        body = json.loads(request.content)
+        sent.append(body)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 100 + len(sent)}})
+
+    real_spawn = main_module._spawn
+    background = []
+    try:
+        voice_agent_module.extract_incident_data, main_module.find_candidates = fake_extract, fake_find
+        main_module._spawn = background.append  # run the after-reply work ourselves, deterministically
+        main_module.NOMINATIM_GAP_S = 0
+        c = TestClient(app)
+
+        def say(iid, text):
+            c.post(f"/api/incidents/{iid}/voice-intake", json={"transcript": text, "language": "ta"})
+            while background:
+                asyncio.run(background.pop(0))
+
+        print(">>> 21. Conversation stored turn by turn; Gemini sees the questions it already asked...")
+        iid = c.post("/api/incidents", json={"category": "Other Emergency", "language": "ta"}).json()["incident_id"]
+        say(iid, "Gemini flyover kitta accident")
+        say(iid, "US consulate opposite side")
+        turns = c.get(f"/api/incidents/{iid}/conversation").json()
+        assert [t["speaker"] for t in turns] == ["caller", "resq", "caller", "resq"]
+        assert turns[1]["text"] == "மேம்பாலத்தின் எந்தப் பக்கம்?"
+        assert "RESQ asked: மேம்பாலத்தின் எந்தப் பக்கம்?" in seen_prompts[-1] and "Caller: US consulate opposite side" in seen_prompts[-1]
+
+        print(">>> 22. Suggested pin: looked up after the reply, shown as UNCERTAIN, not re-searched for the same place...")
+        loc = orchestrator.get_incident(iid).locations.incident_location
+        assert loc.latitude == 13.0516 and loc.verification_status == VerificationStatus.UNCERTAIN and "Suggested" in loc.precision
+        assert find_calls == ["Gemini Flyover, Chennai"]  # second turn kept the suggestion
+        fake.location_search_query = "US Consulate, Gemini Flyover, Chennai"  # more detail: exact search fails, a part matches
+        say(iid, "near the US consulate")
+        assert find_calls[-2:] == ["US Consulate, Gemini Flyover, Chennai", "US Consulate"]
+        assert orchestrator.get_incident(iid).locations.incident_location.latitude == 13.0525
+        fake.location_search_query = "Gemini flyover service road"  # refinement with no match at all: keep the pin
+        say(iid, "on the service road")
+        assert orchestrator.get_incident(iid).locations.incident_location.latitude == 13.0525
+        fake.location_search_query = "Some unmappable place"  # caller corrects the place; no map match
+        say(iid, "sorry, it is somewhere else")
+        assert find_calls[-1] == "Some unmappable place"
+        assert orchestrator.get_incident(iid).locations.incident_location.latitude is None  # old pin cleared, not left wrong
+        fake.location_search_query = "Gemini Flyover, Chennai"
+        say(iid, "no wait, it is Gemini flyover after all")
+        assert orchestrator.get_incident(iid).locations.incident_location.latitude == 13.0516  # pin back for the right place
+        inc = orchestrator.get_incident(iid)
+        ems = next(a for a in inc.coordination_actions if a.action_type == "DISPATCH_EMS")
+        text = dispatch_service.format_message(inc, ems)
+        assert "SUGGESTED by map search, NOT confirmed" in text and "maps.google.com/?q=13.0516,80.2503" in text
+
+        print(">>> 23. Pre-alert goes out on routing (no button, still CREATED); confirmed dispatch replies to it with Acknowledge...")
+        inc2 = orchestrator.create_incident("Fire Hazard", "en")
+        fire = coordination_agent.create_action_proposal(inc2, "NOTIFY_FIRE_RESCUE", "Fire & Rescue (101)")
+        os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_FIRE"] = "test-token", "-1001"
+        dispatch_service.httpx = types.SimpleNamespace(
+            AsyncClient=lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(fake_telegram), **kw))
+        a = asyncio.run(orchestrator.pre_alert(inc2.incident_id, fire.action_id))
+        assert a.status == ActionStatus.CREATED and a.pre_alert_message_id == 101 and "Pre-alert delivered" in a.pre_alert_note
+        assert "PRE-ALERT" in sent[0]["text"] and "reply_markup" not in sent[0]
+        assert asyncio.run(orchestrator.pre_alert(inc2.incident_id, fire.action_id)).pre_alert_message_id == 101  # not sent twice
+        a = asyncio.run(orchestrator.approve_and_dispatch(inc2.incident_id, fire.action_id, "Op"))
+        assert a.status == ActionStatus.SENT and "CONFIRMED DISPATCH" in sent[1]["text"]
+        assert sent[1]["reply_parameters"]["message_id"] == 101 and "Acknowledge" in json.dumps(sent[1]["reply_markup"], ensure_ascii=False)
+
+        print(">>> 24. Merging a pre-alerted duplicate tells the department it's cancelled...")
+        first = orchestrator.create_incident("Fire Hazard", "en")
+        dup = orchestrator.create_incident("Fire Hazard", "en")
+        dup_fire = coordination_agent.create_action_proposal(dup, "NOTIFY_FIRE_RESCUE", "Fire & Rescue (101)")
+        dup_alert = asyncio.run(orchestrator.pre_alert(dup.incident_id, dup_fire.action_id))
+        assert c.post(f"/api/incidents/{dup.incident_id}/merge-into", json={"target_id": first.incident_id}).status_code == 200
+        assert sent[-1]["text"].startswith("CANCELLED")
+        assert sent[-1]["reply_parameters"]["message_id"] == dup_alert.pre_alert_message_id
+    finally:
+        voice_agent_module.extract_incident_data, main_module.find_candidates = real_extract, real_find
+        main_module._spawn = real_spawn
+        main_module.NOMINATIM_GAP_S = 1.1
+        dispatch_service.httpx = httpx
+        os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_FIRE"] = "", ""
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
@@ -370,4 +475,5 @@ if __name__ == "__main__":
     test_telegram_acknowledge_button()
     test_duplicate_callers()
     test_caller_screen_and_device_location()
+    test_conversation_suggested_pin_and_pre_alert()
     print("ALL CHECKS PASSED")
