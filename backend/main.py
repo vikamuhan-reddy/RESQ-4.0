@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.core.persistence import db_engine
 from backend.core.orchestrator import orchestrator, NotFound, Conflict
@@ -26,6 +26,8 @@ from backend.agents.voice_agent import voice_agent
 from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
 from backend.services.gemini_service import transcribe_audio as gemini_transcribe
+from backend.services.geocoding_service import find_candidates
+from backend.models.enums import VerificationStatus
 
 app = FastAPI(
     title="RESQ 4.0 Emergency Intelligence Platform",
@@ -101,6 +103,12 @@ class ApproveActionRequest(BaseModel):
     operator_id: str = "Operator-1"
 
 class AcknowledgeRequest(BaseModel):
+    operator_id: str = "Operator-1"
+
+class ConfirmLocationRequest(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    label: Optional[str] = Field(None, max_length=300)
     operator_id: str = "Operator-1"
 
 class AgencyAckRequest(BaseModel):
@@ -262,6 +270,30 @@ async def approve_coordination_action(incident_id: str, req: ApproveActionReques
         )
     })
     return {**action.model_dump(), "_simulation_warning": "⚠ SIMULATION — no real dispatch occurred" if action.is_simulation else ""}
+
+@app.get("/api/incidents/{incident_id}/location-candidates")
+async def location_candidates(incident_id: str):
+    """Map search for the spoken location. Candidates only; the operator confirms one."""
+    loc = orchestrator.get_incident(incident_id).locations.incident_location
+    if loc.verification_status == VerificationStatus.MISSING:
+        return []
+    for i, query in enumerate(dict.fromkeys(q for q in (loc.search_query, loc.description) if q)):
+        if i:
+            await asyncio.sleep(1)  # Nominatim usage policy: at most 1 request per second
+        try:
+            candidates = await find_candidates(query)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Map search unavailable ({type(e).__name__})")
+        if candidates:
+            return candidates
+    return []
+
+@app.post("/api/incidents/{incident_id}/confirm-location")
+async def confirm_location(incident_id: str, req: ConfirmLocationRequest):
+    inc = orchestrator.confirm_incident_location(incident_id, req.lat, req.lon, req.operator_id, req.label)
+    inc = reasoning_agent.evaluate_incident(inc)
+    await broadcast_event("LOCATION_CONFIRMED", inc.model_dump())
+    return inc
 
 @app.post("/api/incidents/{incident_id}/simulate-ack")
 async def simulate_agency_ack(incident_id: str, req: AgencyAckRequest):

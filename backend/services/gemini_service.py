@@ -25,6 +25,7 @@ class Extraction(BaseModel):
     affected_count: Optional[int] = Field(None, description="Number of injured or affected people, only if the caller states it")
     hazards: List[str] = Field(default_factory=list, description="Active dangers mentioned: fire, smoke, gas leak, trapped people, live wires...")
     incident_location_text: Optional[str] = Field(None, description="Where the emergency is, in the caller's words (landmark, road, area); null if not said")
+    location_search_query: Optional[str] = Field(None, description="A short, clean place name for a map search, in English, e.g. 'Gemini Flyover, Chennai' or 'Vadapalani Signal, Chennai'; null if no place was given")
     caller_location_text: Optional[str] = Field(None, description="Where the caller is, only if they say they are somewhere else")
     caller_on_scene: bool = Field(description="False only if the caller says they are not at the incident (watching from office, driving past...)")
     urgency: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]

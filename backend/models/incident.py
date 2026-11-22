@@ -49,6 +49,7 @@ class LocationRecord(BaseModel):
     verification_status: VerificationStatus = VerificationStatus.CALLER_REPORTED
     confidence: float = 0.5
     notes: Optional[str] = None
+    search_query: Optional[str] = None  # clean place name for "Find on map"; never auto-pinned
 
 class DualLocation(BaseModel):
     caller_location: LocationRecord
@@ -126,9 +127,10 @@ class IncidentRecord(BaseModel):
     fields: Dict[str, FieldProvenance] = Field(default_factory=dict)
     
     # Dual-Location Intelligence
+    # Nothing said yet = MISSING, not "caller reported"
     locations: DualLocation = Field(default_factory=lambda: DualLocation(
-        caller_location=LocationRecord(description="Pending caller location"),
-        incident_location=LocationRecord(description="Pending incident location")
+        caller_location=LocationRecord(description="Pending caller location", verification_status=VerificationStatus.MISSING, confidence=0.0),
+        incident_location=LocationRecord(description="Pending incident location", verification_status=VerificationStatus.MISSING, confidence=0.0)
     ))
     
     # Multi-Agent State

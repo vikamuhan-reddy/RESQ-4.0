@@ -158,7 +158,7 @@ On disconnect, propose routing with whatever is known and flag what's missing.
 | 6–9 | 3.1, 3.2, 3.3 | The wow moment: a phone buzzes | ✅ code done; live Telegram test waits on D3 |
 | 9–10 | 4.1 (delete fake pins, ~10 min) + 5.1 (spoken follow-up) | Safety, and visible "listening" | ✅ done |
 | 10–12 | 6.1 evaluation set, real numbers in README | Answers "how do you know it works?" | ✅ done |
-| 12–14 | Buffer: bugs, then 6.2 timer / 6.4 dropped-call routing if time | Cheap extras after 3.1 |
+| 12–14 | Buffer: bugs, then 6.2 timer / 6.4 dropped-call routing if time | Cheap extras after 3.1 | ✅ 6.2, 6.4, plus 4.2/4.3 (operator confirms location on map); Telegram live-tested |
 | 14–20 | **Sleep** | A tired demo loses |
 | 20–24 | Phase 7: seed script, rehearse ×3, backup video, slides | The demo is what gets judged |
 

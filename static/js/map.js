@@ -116,9 +116,50 @@ class IncidentMapController {
             const unpinned = incident && !(incident.latitude && incident.longitude);
             notice.classList.toggle('hidden', !unpinned);
             notice.textContent = unpinned
-                ? `No pin yet: "${incident.description}" is the caller's description and has not been confirmed on the map.`
+                ? `No pin yet: "${incident.description}" is the caller's description. Use "Find on map" or click the map to confirm it.`
                 : '';
         }
+    }
+
+    // Grey candidate markers from the map search; each popup has a Confirm button
+    showCandidates(candidates, onConfirm) {
+        this.clearCandidates();
+        this.candidateLayer = L.layerGroup().addTo(this.map);
+        candidates.forEach(c => {
+            L.circleMarker([c.lat, c.lon], { radius: 9, color: '#94a3b8', weight: 2, fillOpacity: 0.5 })
+                .bindPopup(this._confirmPopup(c.name, () => onConfirm(c.lat, c.lon, c.name)))
+                .addTo(this.candidateLayer);
+        });
+        this.map.fitBounds(candidates.map(c => [c.lat, c.lon]), { padding: [40, 40], maxZoom: 16 });
+    }
+
+    clearCandidates() {
+        if (this.candidateLayer) this.map.removeLayer(this.candidateLayer);
+        this.candidateLayer = null;
+    }
+
+    // Clicking anywhere on the map offers to confirm that exact point
+    enablePickOnClick(onConfirm) {
+        if (!this.map) return;
+        this.map.on('click', (e) => {
+            const label = `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`;
+            L.popup().setLatLng(e.latlng)
+                .setContent(this._confirmPopup(label, () => onConfirm(e.latlng.lat, e.latlng.lng, null)))
+                .openOn(this.map);
+        });
+    }
+
+    _confirmPopup(label, onConfirm) {
+        const box = document.createElement('div');
+        box.style.cssText = 'color:#0f172a;font-family:sans-serif;font-size:12px;max-width:230px';
+        const text = document.createElement('div');
+        text.textContent = label;
+        const btn = document.createElement('button');
+        btn.textContent = 'Confirm incident location here';
+        btn.style.cssText = 'margin-top:6px;padding:4px 8px;background:#059669;color:#fff;border-radius:4px;font-weight:600;cursor:pointer';
+        btn.onclick = () => { this.map.closePopup(); onConfirm(); };
+        box.append(text, btn);
+        return box;
     }
 }
 

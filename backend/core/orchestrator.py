@@ -3,7 +3,7 @@ RESQ 4.0 Central Orchestration & Safety Engine
 The authoritative controller enforcing state transitions, authorization policies,
 safety constraints, failure continuity, and human-in-the-loop governance.
 """
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from backend.models.incident import (
@@ -11,7 +11,8 @@ from backend.models.incident import (
     TimelineEvent,
     FieldProvenance,
     ProvenanceHistory,
-    CoordinationAction
+    CoordinationAction,
+    LocationRecord
 )
 from backend.models.enums import (
     IncidentState,
@@ -199,6 +200,32 @@ class OrchestrationEngine:
             details={"field": field_name, "new_value": new_value, "reason": reason}
         )
         db_engine.log_event(evt)
+        return incident
+
+    def confirm_incident_location(self, incident_id: str, lat: float, lon: float, operator_id: str, label: Optional[str] = None) -> IncidentRecord:
+        """The only way an incident gets a map pin: an operator confirms the point."""
+        incident = self.get_incident(incident_id)
+        old = incident.locations.incident_location
+        incident.locations.incident_location = LocationRecord(
+            description=old.description if old.verification_status != VerificationStatus.MISSING else (label or "Operator-placed pin"),
+            latitude=lat,
+            longitude=lon,
+            source=ProvenanceSource.OPERATOR_OVERRIDE,
+            timestamp=datetime.utcnow().isoformat(),
+            precision="Operator-confirmed pin",
+            verification_status=VerificationStatus.INDEPENDENTLY_VERIFIED,
+            confidence=1.0,
+            notes=f"Confirmed by {operator_id}" + (f" as {label}" if label else ""),
+            search_query=old.search_query,
+        )
+        db_engine.save_incident(incident)
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident_id,
+            event_type="OPERATOR_LOCATION_CONFIRMED",
+            actor=operator_id,
+            summary=f"Confirmed incident location at {lat:.5f}, {lon:.5f}" + (f" ({label})" if label else ""),
+            details={"previous": old.description, "previous_status": old.verification_status.value, "lat": lat, "lon": lon}
+        ))
         return incident
 
     def operator_acknowledge(self, incident_id: str, operator_id: str = "Operator-1") -> IncidentRecord:

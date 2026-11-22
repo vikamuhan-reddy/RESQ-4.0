@@ -161,7 +161,8 @@ class VoiceIntelligenceAgent:
                     precision="Caller's words (not on map until an operator confirms)",
                     verification_status=VerificationStatus.UNCERTAIN,
                     confidence=e.confidence,
-                    notes="From the caller's description. Not geocoded; confirm before dispatch."
+                    notes="From the caller's description. Not geocoded; confirm before dispatch.",
+                    search_query=e.location_search_query
                 )
             else:
                 loc.incident_location = LocationRecord(
@@ -285,6 +286,9 @@ class VoiceIntelligenceAgent:
                 confidence=0.60,
                 notes="Caller stated they are observing or reporting remotely. No GPS available."
             )
+
+        if incident.locations.incident_location.verification_status == VerificationStatus.INDEPENDENTLY_VERIFIED:
+            return  # an operator-confirmed location is never overwritten by keyword matching
 
         if incident_loc_str:
             incident.locations.incident_location = LocationRecord(

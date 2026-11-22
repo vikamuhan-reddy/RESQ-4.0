@@ -11,7 +11,8 @@ import tempfile
 os.environ["RESQ_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 # Keyword path only, so results are deterministic. Empty (not unset) so load_dotenv() won't refill it from .env
 os.environ["GEMINI_API_KEY"] = ""
-os.environ["TELEGRAM_BOT_TOKEN"] = ""  # never message real Telegram groups from tests
+for _k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_AMBULANCE", "TELEGRAM_CHAT_FIRE", "TELEGRAM_CHAT_POLICE"):
+    os.environ[_k] = ""  # never message real Telegram groups from tests, whatever .env says
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -217,7 +218,63 @@ def test_routing_and_dispatch():
     finally:
         dispatch_service.httpx = httpx
         os.environ["TELEGRAM_BOT_TOKEN"] = ""
-        os.environ.pop("TELEGRAM_CHAT_FIRE", None)
+        os.environ["TELEGRAM_CHAT_FIRE"] = ""
+
+
+def test_location_confirmation_and_dropped_call():
+    import backend.main as main_module
+    real_extract = voice_agent_module.extract_incident_data
+    real_find = main_module.find_candidates
+    fake = Extraction(
+        category="Road Accident", injuries="two bleeding", affected_count=2, hazards=[],
+        incident_location_text="Gemini flyover kitta", location_search_query="Gemini Flyover, Chennai",
+        caller_location_text=None, caller_on_scene=True, urgency="HIGH", missing=["exact location"],
+        next_question_en="Which side?", next_question_ta="எந்தப் பக்கம்?", confidence=0.8,
+    )
+
+    async def fake_extract(_):
+        return fake
+
+    async def fake_find(query):
+        return [{"lat": 13.0516, "lon": 80.2503, "name": f"Anna Flyover ({query})"}]
+
+    try:
+        voice_agent_module.extract_incident_data = fake_extract
+        main_module.find_candidates = fake_find
+
+        print(">>> 15. Dropped call: departments already proposed, incident goes to review, dispatch still possible...")
+        inc = orchestrator.create_incident("Road Accident", "en")
+        inc = asyncio.run(voice_agent.process_utterance(inc, "Gemini flyover kitta accident, two bleeding", "en"))
+        coordination_agent.auto_propose(inc)
+        inc = orchestrator.handle_caller_disconnection(inc.incident_id, "Call dropped")
+        assert inc.state == IncidentState.OPERATOR_REVIEW
+        assert sorted(a.action_type for a in inc.coordination_actions) == ["ALERT_TRAFFIC_POLICE", "DISPATCH_EMS"]
+        ems = next(a for a in inc.coordination_actions if a.action_type == "DISPATCH_EMS")
+        assert asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, ems.action_id, "Op")).status == ActionStatus.SENT
+
+        print(">>> 16. Location: candidates only; operator confirms; pin + map link; never overwritten...")
+        c = TestClient(app)
+        cands = c.get(f"/api/incidents/{inc.incident_id}/location-candidates").json()
+        assert cands and "Gemini Flyover, Chennai" in cands[0]["name"]  # clean query from Gemini is tried first
+        assert orchestrator.get_incident(inc.incident_id).locations.incident_location.latitude is None  # search alone pins nothing
+        assert c.post(f"/api/incidents/{inc.incident_id}/confirm-location", json={"lat": 200, "lon": 80}).status_code == 422
+        r = c.post(f"/api/incidents/{inc.incident_id}/confirm-location", json={"lat": 13.0516, "lon": 80.2503, "label": "Anna Flyover", "operator_id": "Op"})
+        loc = r.json()["locations"]["incident_location"]
+        assert loc["verification_status"] == "INDEPENDENTLY_VERIFIED" and loc["latitude"] == 13.0516
+        inc = orchestrator.get_incident(inc.incident_id)
+        traffic = next(a for a in inc.coordination_actions if a.action_type == "ALERT_TRAFFIC_POLICE")
+        assert "maps.google.com/?q=13.0516,80.2503" in dispatch_service.format_message(inc, traffic)
+        inc = asyncio.run(voice_agent.process_utterance(inc, "please hurry", "en"))
+        assert inc.locations.incident_location.latitude == 13.0516  # AI re-extraction keeps the confirmed pin
+        voice_agent_module.extract_incident_data = real_extract  # keyword path (no key) must keep it too
+        inc = asyncio.run(voice_agent.process_utterance(inc, "it is near the bridge", "en"))
+        assert inc.locations.incident_location.latitude == 13.0516
+
+        missing = orchestrator.create_incident()
+        assert c.get(f"/api/incidents/{missing.incident_id}/location-candidates").json() == []
+    finally:
+        voice_agent_module.extract_incident_data = real_extract
+        main_module.find_candidates = real_find
 
 
 if __name__ == "__main__":
@@ -225,4 +282,5 @@ if __name__ == "__main__":
     test_guards()
     test_gemini_path()
     test_routing_and_dispatch()
+    test_location_confirmation_and_dropped_call()
     print("ALL CHECKS PASSED")

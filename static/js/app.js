@@ -17,7 +17,54 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function initApp() {
     mapController.init();
+    mapController.enablePickOnClick(confirmLocation);
     injectSimulationBanner();
+}
+
+// Server timestamps are UTC without a "Z"; without this, browsers read them as local time
+function parseUtc(s) {
+    return new Date(/Z$|[+-]\d\d:\d\d$/.test(s) ? s : s + 'Z');
+}
+
+let dispatchTimer = null;
+function renderDispatchTimer(inc) {
+    const el = document.getElementById('detail-timer');
+    if (!el) return;
+    clearInterval(dispatchTimer);
+    const start = parseUtc(inc.created_at);
+    const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+    const firstSent = (inc.coordination_actions || []).map(a => a.transmitted_at).filter(Boolean).map(parseUtc).sort((a, b) => a - b)[0];
+    if (firstSent) {
+        el.textContent = `Department notified in ${fmt(firstSent - start)}`;
+        el.className = 'px-2.5 py-0.5 rounded text-xs font-bold font-mono bg-emerald-950 border border-emerald-700 text-emerald-300';
+        return;
+    }
+    const tick = () => { el.textContent = `No department notified yet · ${fmt(Date.now() - start)}`; };
+    tick();
+    dispatchTimer = setInterval(tick, 1000);
+    el.className = 'px-2.5 py-0.5 rounded text-xs font-bold font-mono bg-amber-950 border border-amber-700 text-amber-300';
+}
+
+async function findLocationOnMap() {
+    if (!activeIncidentId) return alert('Select an active incident first.');
+    try {
+        const candidates = await API.get(`/api/incidents/${activeIncidentId}/location-candidates`);
+        if (!candidates.length) return alert('No map match for this description. Click the map to place the incident yourself.');
+        mapController.showCandidates(candidates, confirmLocation);
+    } catch (err) {
+        alert('Map search failed: ' + err.message);
+    }
+}
+
+async function confirmLocation(lat, lon, label) {
+    if (!activeIncidentId) return alert('Select an active incident first.');
+    try {
+        await API.post(`/api/incidents/${activeIncidentId}/confirm-location`, { lat, lon, label, operator_id: 'Operator-Lead' });
+        mapController.clearCandidates();
+        await selectIncident(activeIncidentId);
+    } catch (err) {
+        alert('Error confirming location: ' + err.message);
+    }
 }
 
 function setupEventListeners() {
@@ -294,6 +341,8 @@ function renderIncidentDetail(inc) {
 
     // Timeline Audit Trail
     loadTimeline(inc.incident_id);
+
+    renderDispatchTimer(inc);
 }
 
 function renderProvenanceFields(fields) {
@@ -491,7 +540,7 @@ async function loadTimeline(incident_id) {
                 '<div class="w-6 h-6 rounded-full bg-red-950 border border-red-500 text-red-400 flex items-center justify-center shrink-0"><i class="fas fa-bolt"></i></div>' : 
                 '<div class="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 text-cyan-400 flex items-center justify-center shrink-0"><i class="fas fa-circle-check"></i></div>';
 
-            const timeStr = new Date(evt.timestamp).toLocaleTimeString();
+            const timeStr = parseUtc(evt.timestamp).toLocaleTimeString();
             row.innerHTML = `
                 ${icon}
                 <div class="flex-1">

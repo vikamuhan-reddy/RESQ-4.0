@@ -18,12 +18,13 @@ The person answering an emergency call has to understand a panicking caller, oft
 
 | Working | Not yet |
 |---|---|
-| Gemini understands Tamil, English and mixed calls, re-reading the whole conversation each turn | Operators can't yet confirm a location on the map, so no incident is pinned |
+| Gemini understands Tamil, English and mixed calls, re-reading the whole conversation each turn | Map search covers Chennai only (set `GEOCODE_VIEWBOX` for another city) |
 | Real AI failures (timeout, overload, bad key, no network) are logged, flagged for review, and fall back to keyword rules | No login or roles |
 | Rules decide the departments; a human approves every dispatch | Telegram stands in for real department systems; **no real agency is contacted** |
 | A dispatch counts as sent only when Telegram confirms delivery; failures are shown and can be retried | Audio transcription through Gemini is built but not yet tested with live microphone recordings (browser speech recognition is used today) |
 | The next question is spoken in the caller's language (needs a browser with a Tamil voice, e.g. Microsoft Edge) | Accuracy is measured on 30 team-written calls, not real call audio |
-| Locations stay in the caller's words; nothing is pinned until confirmed | |
+| Locations stay in the caller's words until an operator confirms one on the map (search or click); only then is there a pin and a map link in the dispatch | |
+| On-screen timer from call start to first department notified | |
 | Enforced incident state machine, per-field provenance, operator corrections with history, SQLite persistence | |
 
 The step-by-step roadmap is in [PLAN.md](PLAN.md).
@@ -70,6 +71,7 @@ backend/
   agents/coordination_agent.py  routing rules + department proposals
   services/gemini_service.py    typed Gemini extraction + audio transcription
   services/dispatch_service.py  dispatch message template + Telegram delivery
+  services/geocoding_service.py map-search candidates (operator confirms; never auto-pinned)
 static/                   operator dashboard (HTML + vanilla JS + Leaflet)
 tests/test_resq.py        offline end-to-end checks
 tests/eval.py             accuracy evaluation on tests/eval_calls.jsonl
