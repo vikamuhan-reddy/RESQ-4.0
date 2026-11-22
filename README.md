@@ -24,6 +24,9 @@ The person answering an emergency call has to understand a panicking caller, oft
 | A dispatch counts as sent only when Telegram confirms delivery; failures are shown and can be retried | Audio transcription through Gemini is built but not yet tested with live microphone recordings (browser speech recognition is used today) |
 | The next question is spoken in the caller's language (needs a browser with a Tamil voice, e.g. Microsoft Edge) | Accuracy is measured on 30 team-written calls, not real call audio |
 | Locations stay in the caller's words until an operator confirms one on the map (search or click); only then is there a pin and a map link in the dispatch | |
+| Departments acknowledge from Telegram with one tap; the dashboard and caller screen update live | |
+| A second report of the same place within 15 minutes is flagged; the operator merges it and its pending dispatches are cancelled | |
+| Caller screen (`/caller`): call, speak or type, hear the next question, see help status; can share the device's location | The caller screen needs https or localhost for mic and location (fine on the demo laptop, not on a phone over plain Wi-Fi) |
 | On-screen timer from call start to first department notified | |
 | Enforced incident state machine, per-field provenance, operator corrections with history, SQLite persistence | |
 
@@ -51,12 +54,13 @@ Reproduce with `python tests/eval.py` (Gemini) or `python tests/eval.py --keywor
 ```powershell
 pip install -r requirements.txt
 copy .env.example .env      # optional: add GEMINI_API_KEY
-python run_server.py        # http://127.0.0.1:8000  (API docs at /docs)
+python scripts/reset_demo.py   # fresh demo database with two background incidents
+python run_server.py        # dashboard http://127.0.0.1:8000, caller screen /caller, API docs /docs
 python tests/test_resq.py   # offline checks, throwaway DB
 python tests/eval.py        # 30-call accuracy run (uses your Gemini key)
 ```
 
-For the Telegram dispatch demo, fill in `TELEGRAM_BOT_TOKEN` and the `TELEGRAM_CHAT_*` IDs in `.env` (see `.env.example`). Without them, approvals are marked as a simulated delivery.
+For the Telegram dispatch demo, fill in `TELEGRAM_BOT_TOKEN` and the `TELEGRAM_CHAT_*` IDs in `.env` (see `.env.example`). Without them, approvals are marked as a simulated delivery. The stage script is in [DEMO.md](DEMO.md).
 
 ## Layout
 
@@ -72,7 +76,8 @@ backend/
   services/gemini_service.py    typed Gemini extraction + audio transcription
   services/dispatch_service.py  dispatch message template + Telegram delivery
   services/geocoding_service.py map-search candidates (operator confirms; never auto-pinned)
-static/                   operator dashboard (HTML + vanilla JS + Leaflet)
+static/                   operator dashboard (HTML + vanilla JS + Leaflet); caller.html = caller screen
+scripts/reset_demo.py     fresh demo database with background incidents
 tests/test_resq.py        offline end-to-end checks
 tests/eval.py             accuracy evaluation on tests/eval_calls.jsonl
 ```

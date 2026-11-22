@@ -159,6 +159,7 @@ On disconnect, propose routing with whatever is known and flag what's missing.
 | 9–10 | 4.1 (delete fake pins, ~10 min) + 5.1 (spoken follow-up) | Safety, and visible "listening" | ✅ done |
 | 10–12 | 6.1 evaluation set, real numbers in README | Answers "how do you know it works?" | ✅ done |
 | 12–14 | Buffer: bugs, then 6.2 timer / 6.4 dropped-call routing if time | Cheap extras after 3.1 | ✅ 6.2, 6.4, plus 4.2/4.3 (operator confirms location on map); Telegram live-tested |
+| extra | 3.4 Telegram Acknowledge, 6.3 duplicate merge, 5.2 caller screen + 4.4 caller GPS, demo kit (reset script + DEMO.md) | Requested after the plan was done | ✅ done; live Telegram tap still to test with you |
 | 14–20 | **Sleep** | A tired demo loses |
 | 20–24 | Phase 7: seed script, rehearse ×3, backup video, slides | The demo is what gets judged |
 
