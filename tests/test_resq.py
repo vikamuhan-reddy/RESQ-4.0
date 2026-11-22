@@ -347,6 +347,20 @@ def test_duplicate_callers():
     assert second.incident_id not in still_flagged  # merged reports drop out of the candidate list
 
 
+def test_caller_screen_and_device_location():
+    print(">>> 20. Caller screen served; device GPS stored as caller location and not overwritten by words...")
+    c = TestClient(app)
+    assert c.get("/caller").status_code == 200 and "Call 112" in c.get("/caller").text
+    inc = orchestrator.create_incident("Other Emergency", "en")
+    assert c.post(f"/api/incidents/{inc.incident_id}/caller-location", json={"lat": 13.04, "lon": 80.23, "accuracy_m": -5}).status_code == 422
+    r = c.post(f"/api/incidents/{inc.incident_id}/caller-location", json={"lat": 13.04, "lon": 80.23, "accuracy_m": 25})
+    assert r.status_code == 200 and r.json()["locations"]["caller_location"]["source"] == "DEVICE_GPS"
+    inc = asyncio.run(voice_agent.process_utterance(inc, "Accident near the bridge, I am calling from my office", "en"))
+    caller = inc.locations.caller_location
+    assert caller.latitude == 13.04 and caller.source.value == "DEVICE_GPS"
+    assert inc.locations.is_separated  # words still tell us the caller is away from the scene
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
@@ -355,4 +369,5 @@ if __name__ == "__main__":
     test_location_confirmation_and_dropped_call()
     test_telegram_acknowledge_button()
     test_duplicate_callers()
+    test_caller_screen_and_device_location()
     print("ALL CHECKS PASSED")

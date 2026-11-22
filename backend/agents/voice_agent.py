@@ -176,14 +176,15 @@ class VoiceIntelligenceAgent:
 
         loc.is_separated = not e.caller_on_scene
         loc.separation_rationale = "Caller says they are not at the incident" if loc.is_separated else None
-        loc.caller_location = LocationRecord(
-            description=(e.caller_location_text or "Away from the scene (not said where)") if loc.is_separated else "At the incident scene",
-            source=ProvenanceSource.AI_EXTRACTION,
-            timestamp=now,
-            precision="Caller-stated",
-            verification_status=VerificationStatus.CALLER_REPORTED,
-            confidence=e.confidence
-        )
+        if loc.caller_location.source != ProvenanceSource.DEVICE_GPS:  # a device fix beats words
+            loc.caller_location = LocationRecord(
+                description=(e.caller_location_text or "Away from the scene (not said where)") if loc.is_separated else "At the incident scene",
+                source=ProvenanceSource.AI_EXTRACTION,
+                timestamp=now,
+                precision="Caller-stated",
+                verification_status=VerificationStatus.CALLER_REPORTED,
+                confidence=e.confidence
+            )
 
         incident.follow_up_queue.clear()
         if e.missing:
@@ -270,7 +271,10 @@ class VoiceIntelligenceAgent:
                 incident_loc_str = desc
                 break
 
-        if caller_away:
+        if caller_away and incident.locations.caller_location.source == ProvenanceSource.DEVICE_GPS:
+            incident.locations.is_separated = True
+            incident.locations.separation_rationale = "Caller explicitly stated they are not at the incident location"
+        elif caller_away:
             incident.locations.is_separated = True
             incident.locations.separation_rationale = "Caller explicitly stated they are not at the incident location"
             caller_desc = "Caller Office / Remote Location" if ("office" in text_lower or "அலுவலக" in text) \

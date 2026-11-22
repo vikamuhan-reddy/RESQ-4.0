@@ -228,6 +228,28 @@ class OrchestrationEngine:
         ))
         return incident
 
+    def set_caller_device_location(self, incident_id: str, lat: float, lon: float, accuracy_m: float) -> IncidentRecord:
+        """Location shared by the caller's device. Describes the caller, not necessarily the incident."""
+        incident = self.get_incident(incident_id)
+        incident.locations.caller_location = LocationRecord(
+            description=f"Caller's device location (±{accuracy_m:.0f} m)",
+            latitude=lat,
+            longitude=lon,
+            source=ProvenanceSource.DEVICE_GPS,
+            timestamp=datetime.utcnow().isoformat(),
+            precision=f"Device GPS ±{accuracy_m:.0f} m",
+            verification_status=VerificationStatus.CALLER_REPORTED,
+            confidence=0.9 if accuracy_m <= 100 else 0.5,
+            notes="Shared by the caller's device; not independently verified.",
+        )
+        db_engine.save_incident(incident)
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident_id, event_type="CALLER_LOCATION_SHARED", actor="Caller device",
+            summary=f"Caller's device shared its location (±{accuracy_m:.0f} m)",
+            details={"lat": lat, "lon": lon, "accuracy_m": accuracy_m}
+        ))
+        return incident
+
     def merge_incident(self, duplicate_id: str, target_id: str, operator_id: str) -> IncidentRecord:
         """
         An operator decides two reports are the same emergency (never automatic). The duplicate's

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RESQ Caller (demo)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="min-h-screen bg-[#070b14] text-slate-100 flex items-start sm:items-center justify-center p-4">
+<main class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl space-y-4">
+    <div class="flex items-center justify-between">
+        <div>
+            <div class="text-xs font-mono text-amber-300">DEMO · not a real emergency line</div>
+            <h1 class="text-lg font-extrabold">Emergency call</h1>
+        </div>
+        <select id="lang" class="bg-slate-950 border border-slate-700 text-xs rounded-lg px-2 py-1.5">
+            <option value="ta">தமிழ்</option>
+            <option value="en">English</option>
+        </select>
+    </div>
+
+    <p id="insecure" class="hidden text-[11px] text-amber-300 bg-amber-950/40 border border-amber-800 rounded-lg p-2">
+        Microphone and location only work on https or localhost. Open this page on the computer running RESQ
+        (http://localhost:8000/caller), or type your report below.
+    </p>
+
+    <!-- Before the call -->
+    <section id="pre-call" class="py-8 flex flex-col items-center gap-3">
+        <button id="btn-call" class="w-28 h-28 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-4xl shadow-lg shadow-emerald-900/50">
+            <i class="fas fa-phone"></i>
+        </button>
+        <div class="text-sm font-semibold">Call 112</div>
+    </section>
+
+    <!-- During the call -->
+    <section id="in-call" class="hidden space-y-4">
+        <div class="flex items-center justify-between text-xs font-mono">
+            <span class="text-emerald-400"><i class="fas fa-circle text-[8px] mr-1"></i><span id="call-id">Connected</span></span>
+            <span id="call-time" class="text-slate-400">0:00</span>
+        </div>
+
+        <div class="p-3 rounded-xl bg-cyan-950/40 border border-cyan-800 min-h-[72px]">
+            <div class="text-[10px] font-bold uppercase text-cyan-400 mb-1 flex items-center justify-between">
+                <span>RESQ asks</span>
+                <button id="btn-replay" class="text-cyan-300 hidden" title="Hear again"><i class="fas fa-volume-high"></i></button>
+            </div>
+            <p id="question" class="text-base font-semibold leading-snug">What is your emergency?</p>
+        </div>
+
+        <div class="flex flex-col items-center gap-2">
+            <canvas id="caller-wave" width="240" height="32" class="w-60 h-8 rounded"></canvas>
+            <button id="btn-mic" class="w-20 h-20 rounded-full bg-cyan-600 hover:bg-cyan-500 text-white text-3xl shadow-lg">
+                <i class="fas fa-microphone"></i>
+            </button>
+            <div id="mic-label" class="text-xs text-slate-400">Tap to speak</div>
+            <p id="preview" class="text-xs text-slate-300 text-center min-h-[1rem]"></p>
+        </div>
+
+        <div class="flex gap-2">
+            <input id="typed" type="text" placeholder="…or type what is happening" class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+            <button id="btn-send" class="px-3 rounded-lg bg-slate-800 border border-slate-700 text-cyan-300"><i class="fas fa-paper-plane"></i></button>
+        </div>
+
+        <div>
+            <div class="text-[10px] font-bold uppercase text-slate-400 mb-1">Help status</div>
+            <ul id="help" class="space-y-1 text-sm"><li class="text-slate-500 text-xs">Tell us what happened so we can send the right help.</li></ul>
+        </div>
+
+        <p id="note" class="text-[11px] text-slate-400 min-h-[1rem]"></p>
+
+        <button id="btn-hangup" class="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 font-bold"><i class="fas fa-phone-slash mr-2"></i>Hang up</button>
+    </section>
+
+    <section id="ended" class="hidden text-center py-6 space-y-2">
+        <div class="text-lg font-bold">Call ended</div>
+        <p class="text-sm text-slate-400">Your report stays with the operator, even though the call ended.</p>
+        <button onclick="location.reload()" class="text-xs text-cyan-300 underline">New call</button>
+    </section>
+</main>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/voice_recorder.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const ICON = { DISPATCH_EMS: '🚑', NOTIFY_FIRE_RESCUE: '🚒', ALERT_POLICE: '🚓', ALERT_TRAFFIC_POLICE: '🚦' };
+const STATUS_TEXT = { CREATED: 'being arranged', QUEUED: 'sending…', SENT: 'notified', ACKNOWLEDGED: 'acknowledged ✓', FAILED: 'operator is following up' };
+let incidentId = null, startedAt = null, lastQuestion = null;
+
+if (!window.isSecureContext) $('insecure').classList.remove('hidden');
+const note = (m) => { $('note').textContent = m; };
+const lang = () => $('lang').value;
+$('lang').onchange = () => voiceInterface.setLanguage(lang());
+voiceInterface.setLanguage(lang());
+
+function render(inc) {
+    if (inc.is_merged) {
+        $('help').innerHTML = `<li class="text-cyan-300 text-xs">Your report was linked to an emergency that is already being handled (${esc(inc.merged_into_id)}).</li>`;
+        return;
+    }
+    const items = (inc.coordination_actions || []).filter(a => STATUS_TEXT[a.status]);
+    if (items.length) {
+        $('help').innerHTML = items.map(a => `<li>${ICON[a.action_type] || '🆘'} ${esc(a.target_agency)}: <strong>${esc(STATUS_TEXT[a.status])}</strong></li>`).join('');
+    }
+}
+
+function ask(q) {
+    lastQuestion = q;
+    $('question').textContent = q ? q.question_text : 'Thank you. Stay on the line if you can.';
+    $('btn-replay').classList.toggle('hidden', !q);
+    if (q && !voiceInterface.speak(q.question_text, q.language)) note('No voice for this language in this browser; please read the question.');
+}
+
+async function send(text) {
+    if (!incidentId || !text || !text.trim()) return;
+    note('Sending…');
+    try {
+        const inc = await API.post(`/api/incidents/${incidentId}/voice-intake`, { transcript: text.trim(), language: lang() });
+        note('');
+        render(inc);
+        ask(inc.follow_up_queue && inc.follow_up_queue[0]);
+    } catch (err) {
+        note('Could not send: ' + err.message);
+    }
+}
+
+function shareLocation() {
+    if (!navigator.geolocation) return note('Location sharing is not available in this browser.');
+    navigator.geolocation.getCurrentPosition(
+        (p) => API.post(`/api/incidents/${incidentId}/caller-location`, { lat: p.coords.latitude, lon: p.coords.longitude, accuracy_m: p.coords.accuracy })
+            .then(() => note('📍 Your location was shared with the operator.')),
+        (err) => note('Location not shared (' + err.message + ').'),
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+}
+
+$('btn-call').onclick = async () => {
+    try {
+        const inc = await API.post('/api/incidents', { category: 'Other Emergency', language: lang() });
+        incidentId = inc.incident_id;
+        startedAt = Date.now();
+        $('pre-call').classList.add('hidden');
+        $('in-call').classList.remove('hidden');
+        $('call-id').textContent = `Connected · ${incidentId}`;
+        setInterval(() => {
+            const s = Math.round((Date.now() - startedAt) / 1000);
+            $('call-time').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        }, 1000);
+        ask({ question_text: lang() === 'ta' ? 'உங்கள் அவசரநிலை என்ன? எங்கே நடக்கிறது?' : 'What is your emergency, and where is it happening?', language: lang() });
+        shareLocation();
+    } catch (err) {
+        note('Could not connect: ' + err.message);
+    }
+};
+
+$('btn-mic').onclick = async () => {
+    const recording = await voiceInterface.toggleRecording('caller-wave',
+        (text, isFinal) => { $('preview').textContent = text; if (isFinal) { send(text); $('preview').textContent = ''; } },
+        (message) => note(message));
+    $('btn-mic').classList.toggle('bg-red-600', recording);
+    $('btn-mic').classList.toggle('bg-cyan-600', !recording);
+    $('mic-label').textContent = recording ? 'Listening… tap to send' : 'Tap to speak';
+};
+
+$('btn-send').onclick = () => { send($('typed').value); $('typed').value = ''; };
+$('typed').onkeydown = (e) => { if (e.key === 'Enter') $('btn-send').click(); };
+$('btn-replay').onclick = () => ask(lastQuestion);
+
+$('btn-hangup').onclick = async () => {
+    if (incidentId) {
+        try { await API.post(`/api/incidents/${incidentId}/disconnect`, { reason: 'Caller hung up' }); } catch (e) { /* the incident is kept either way */ }
+    }
+    window.speechSynthesis && window.speechSynthesis.cancel();
+    $('in-call').classList.add('hidden');
+    $('ended').classList.remove('hidden');
+};
+
+// Live help status (approvals and Telegram acknowledgements arrive over SSE)
+API.initSSE((msg) => { if (incidentId && msg.data && msg.data.incident_id === incidentId) render(msg.data); });
+</script>
+</body>
+</html>

@@ -34,6 +34,7 @@ class ProvenanceSource(str, Enum):
     OPERATOR_OVERRIDE = "OPERATOR_OVERRIDE"
     CROSS_REFERENCE = "CROSS_REFERENCE"
     SYSTEM_RECOVERY = "SYSTEM_RECOVERY"
+    DEVICE_GPS = "DEVICE_GPS"  # shared by the caller's phone/browser, not independently verified
 
 class ActionStatus(str, Enum):
     CREATED = "CREATED"

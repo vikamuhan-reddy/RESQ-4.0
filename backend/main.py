@@ -112,6 +112,11 @@ class ConfirmLocationRequest(BaseModel):
     label: Optional[str] = Field(None, max_length=300)
     operator_id: str = "Operator-1"
 
+class CallerLocationRequest(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    accuracy_m: float = Field(ge=0, le=100000)
+
 class MergeRequest(BaseModel):
     target_id: str
     operator_id: str = "Operator-1"
@@ -165,6 +170,12 @@ async def serve_index():
         with open(index_file, "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>RESQ 4.0 Running - Static files loading...</h1>")
+
+@app.get("/caller", response_class=HTMLResponse)
+async def serve_caller():
+    """Phone-style caller screen for the demo."""
+    with open(os.path.join(static_dir, "caller.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 @app.get("/api/health")
 async def health_check():
@@ -298,6 +309,12 @@ async def confirm_location(incident_id: str, req: ConfirmLocationRequest):
     inc = orchestrator.confirm_incident_location(incident_id, req.lat, req.lon, req.operator_id, req.label)
     inc = reasoning_agent.evaluate_incident(inc)
     await broadcast_event("LOCATION_CONFIRMED", inc.model_dump())
+    return inc
+
+@app.post("/api/incidents/{incident_id}/caller-location")
+async def caller_location(incident_id: str, req: CallerLocationRequest):
+    inc = orchestrator.set_caller_device_location(incident_id, req.lat, req.lon, req.accuracy_m)
+    await broadcast_event("CALLER_LOCATION_SHARED", inc.model_dump())
     return inc
 
 @app.post("/api/incidents/{incident_id}/merge-into")
