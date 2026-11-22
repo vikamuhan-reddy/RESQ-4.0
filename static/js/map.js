@@ -109,6 +109,16 @@ class IncidentMapController {
         if (bounds.length > 0) {
             this.map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
         }
+
+        // Say why there is no pin, instead of leaving an empty map
+        const notice = document.getElementById('map-notice');
+        if (notice) {
+            const unpinned = incident && !(incident.latitude && incident.longitude);
+            notice.classList.toggle('hidden', !unpinned);
+            notice.textContent = unpinned
+                ? `No pin yet: "${incident.description}" is the caller's description and has not been confirmed on the map.`
+                : '';
+        }
     }
 }
 

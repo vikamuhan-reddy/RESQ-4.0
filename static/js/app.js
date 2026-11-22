@@ -69,17 +69,32 @@ function setupEventListeners() {
             if (!input || !input.value.trim()) return alert('Please enter or record an emergency utterance.');
             if (!activeIncidentId) return alert('Please select an active incident from the queue.');
 
+            submitIntakeBtn.disabled = true;
+            showVoiceStatus('Understanding the call…', 'info');
             try {
-                await API.post(`/api/incidents/${activeIncidentId}/voice-intake`, {
+                const inc = await API.post(`/api/incidents/${activeIncidentId}/voice-intake`, {
                     transcript: input.value.trim(),
                     language: lang
                 });
                 input.value = '';
                 await selectIncident(activeIncidentId);
+                askCaller(inc.follow_up_queue && inc.follow_up_queue[0]);
             } catch (err) {
                 alert('Error submitting intake: ' + err.message);
+            } finally {
+                submitIntakeBtn.disabled = false;
             }
         });
+    }
+}
+
+// Speak the next question to the caller; warn if this browser has no voice for the language
+function askCaller(q) {
+    if (!q) return;
+    if (voiceInterface.speak(q.question_text, q.language)) {
+        showVoiceStatus(`Asking the caller: ${q.question_text}`, 'info');
+    } else {
+        showVoiceStatus('No Tamil voice in this browser. Open the dashboard in Microsoft Edge, or read the question to the caller.', 'warn');
     }
 }
 
@@ -405,9 +420,7 @@ function renderAgentReasoning(reasoning, followUps) {
             followUpCard.classList.remove('hidden');
             document.getElementById('follow-up-text').innerText = `"${q.question_text}"`;
             document.getElementById('follow-up-rationale').innerText = q.rationale;
-            document.getElementById('btn-speak-question').onclick = () => {
-                voiceInterface.speak(q.question_text, q.language);
-            };
+            document.getElementById('btn-speak-question').onclick = () => askCaller(q);
         } else {
             followUpCard.classList.add('hidden');
         }

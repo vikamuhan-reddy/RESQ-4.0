@@ -36,18 +36,20 @@ CATEGORY_KEYWORDS = {
     IncidentCategory.ROAD_ACCIDENT: ["accident", "crash", "collision", "hit", "bike", "car", "lorry", "bus", "விபத்து"],
 }
 
-LANDMARK_COORDS = {
-    "anna flyover": ("Anna Flyover / Gemini Circle Bridge", 13.0524, 80.2508),
-    "anna bridge": ("Anna Flyover / Gemini Circle Bridge", 13.0524, 80.2508),
-    "அண்ணா மேம்பாலம்": ("Anna Flyover / Gemini Circle Bridge", 13.0524, 80.2508),
-    "bridge": ("Unspecified Bridge Landmark", 13.0450, 80.2400),
-    "மேம்பாலம்": ("Unspecified Bridge Landmark", 13.0450, 80.2400),
-    "பாலம்": ("Unspecified Bridge Landmark", 13.0450, 80.2400),
-    "highway": ("Highway Bypass Section", 13.0100, 80.2000),
-    "bypass": ("Highway Bypass Section", 13.0100, 80.2000),
-    "நெடுஞ்சாலை": ("Highway Bypass Section", 13.0100, 80.2000),
-    "market": ("Central Market Area", 13.0827, 80.2707),
-    "சந்தை": ("Central Market Area", 13.0827, 80.2707),
+# Keyword -> landmark name. No coordinates on purpose: a spoken landmark is never a map pin
+# until an operator confirms it.
+LANDMARKS = {
+    "anna flyover": "Anna Flyover / Gemini Circle",
+    "anna bridge": "Anna Flyover / Gemini Circle",
+    "அண்ணா மேம்பாலம்": "Anna Flyover / Gemini Circle",
+    "bridge": "A bridge (unspecified)",
+    "மேம்பாலம்": "A flyover (unspecified)",
+    "பாலம்": "A bridge (unspecified)",
+    "highway": "A highway (unspecified)",
+    "bypass": "A bypass road (unspecified)",
+    "நெடுஞ்சாலை": "A highway (unspecified)",
+    "market": "A market (unspecified)",
+    "சந்தை": "A market (unspecified)",
 }
 
 CALLER_AWAY_PHRASES = [
@@ -262,12 +264,9 @@ class VoiceIntelligenceAgent:
                       "நான் இங்க இல்ல" in text or "அலுவலகத்தில் இருந்து" in text
 
         incident_loc_str = None
-        lat, lng = None, None
-
-        for keyword, (desc, klat, klng) in LANDMARK_COORDS.items():
+        for keyword, desc in LANDMARKS.items():
             if keyword in text_lower or keyword in text:
                 incident_loc_str = desc
-                lat, lng = klat, klng
                 break
 
         if caller_away:
@@ -290,14 +289,12 @@ class VoiceIntelligenceAgent:
         if incident_loc_str:
             incident.locations.incident_location = LocationRecord(
                 description=incident_loc_str,
-                latitude=lat,
-                longitude=lng,
                 source=ProvenanceSource.CALLER_VOICE,
                 timestamp=timestamp,
-                precision="Landmark / Approximate (requires exact pin)",
+                precision="Landmark from caller's words (not on map until confirmed)",
                 verification_status=VerificationStatus.UNCERTAIN,
                 confidence=0.60,
-                notes="Landmark identified from voice keyword. Exact GPS unverified — confirm before dispatch."
+                notes="Landmark matched by keyword. Not geocoded; confirm before dispatch."
             )
         elif not incident.locations.incident_location.description or \
              incident.locations.incident_location.description == "Pending incident location":

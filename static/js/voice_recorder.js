@@ -23,6 +23,7 @@ class VoiceIntelligenceInterface {
         this._finalTranscript = '';
 
         this.initSpeechRecognition();
+        if (window.speechSynthesis) window.speechSynthesis.getVoices();  // voices load async; start early
     }
 
     initSpeechRecognition() {
@@ -249,13 +250,21 @@ class VoiceIntelligenceInterface {
         render();
     }
 
+    // Returns false when there is no voice for the language (many Chrome installs have no Tamil
+    // voice; Microsoft Edge ships online "Natural" Tamil voices), so the caller can warn the operator.
     speak(text, lang = 'en') {
-        if (!window.speechSynthesis) return;
+        if (!window.speechSynthesis) return false;
+        const prefix = lang === 'ta' ? 'ta' : 'en';
+        const voices = window.speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith(prefix));
+        if (lang === 'ta' && voices.length === 0) return false;
+        const voice = voices.find(v => /natural/i.test(v.name)) || voices.find(v => /-IN$/i.test(v.lang)) || voices[0];
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = lang === 'ta' ? 'ta-IN' : 'en-US';
+        utterance.lang = lang === 'ta' ? 'ta-IN' : 'en-IN';
+        if (voice) utterance.voice = voice;
         utterance.rate = 0.95;
         window.speechSynthesis.speak(utterance);
+        return true;
     }
 }
 
