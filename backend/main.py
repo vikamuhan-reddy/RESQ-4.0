@@ -27,6 +27,7 @@ from backend.agents.reasoning_agent import reasoning_agent
 from backend.agents.coordination_agent import coordination_agent
 from backend.services.gemini_service import transcribe_audio as gemini_transcribe
 from backend.services.geocoding_service import find_candidates
+from backend.services import dispatch_service
 from backend.models.enums import VerificationStatus
 
 app = FastAPI(
@@ -297,7 +298,7 @@ async def confirm_location(incident_id: str, req: ConfirmLocationRequest):
 
 @app.post("/api/incidents/{incident_id}/simulate-ack")
 async def simulate_agency_ack(incident_id: str, req: AgencyAckRequest):
-    action = orchestrator.simulate_agency_acknowledgment(
+    action = orchestrator.record_agency_acknowledgment(
         incident_id=incident_id,
         action_id=req.action_id,
         responder_ref=req.responder_ref
@@ -334,19 +335,19 @@ async def event_stream(request: Request):
                 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# Seed initial demonstration incidents if empty
+# ----------------- Telegram "Acknowledge" button -----------------
+
+async def _on_telegram_ack(incident_id: str, action_id: str, who: str) -> str:
+    """A department tapped Acknowledge on the dispatch message."""
+    act = orchestrator.record_agency_acknowledgment(incident_id, action_id, responder_ref=f"Telegram ({who})")
+    await broadcast_event("AGENCY_ACKNOWLEDGED", db_engine.get_incident(incident_id).model_dump())
+    return f"Acknowledged: {act.target_agency}, incident {incident_id}"
+
+# Demo data comes from scripts/reset_demo.py, not from startup
 @app.on_event("startup")
 async def startup_event():
-    existing = db_engine.list_incidents()
-    if not existing:
-        # Seed initial rich incident
-        inc = orchestrator.create_incident("Road Accident", "ta")
-        inc = await voice_agent.process_utterance(
-            incident=inc,
-            raw_text="வணக்கம், அண்ணா மேம்பாலம் அருகே ஒரு பெரிய விபத்து. இரண்டு பேர் பலத்த காயமடைந்துள்ளனர். நான் இங்க இல்ல, என் அலுவலகத்திலிருந்து பார்க்கிறேன்.",
-            language="ta"
-        )
-        inc = reasoning_agent.evaluate_incident(inc)
-        coordination_agent.auto_propose(inc)
-        orchestrator.operator_acknowledge(inc.incident_id, "Operator-Lead-Priya")
-        print(f"RESQ 4.0 Initialized with Seed Incident: {inc.incident_id}")
+    app.state.telegram_ack_task = asyncio.create_task(dispatch_service.poll_acknowledgements(_on_telegram_ack))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    app.state.telegram_ack_task.cancel()

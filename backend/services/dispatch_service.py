@@ -3,8 +3,9 @@ RESQ 4.0 Dispatch delivery.
 Builds the department message from a fixed template (not AI-written) and delivers it to that
 department's Telegram group. Without a bot token it does a clearly labelled simulated delivery.
 """
+import asyncio
 import os
-from typing import Tuple
+from typing import Tuple, Callable, Awaitable
 
 import httpx
 
@@ -59,7 +60,13 @@ async def deliver(incident: IncidentRecord, action: CoordinationAction) -> Tuple
         async with httpx.AsyncClient(timeout=8) as client:
             r = await client.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": format_message(incident, action)},
+                json={
+                    "chat_id": chat_id,
+                    "text": format_message(incident, action),
+                    "reply_markup": {"inline_keyboard": [[
+                        {"text": "✅ Acknowledge", "callback_data": f"ack:{incident.incident_id}:{action.action_id}"}
+                    ]]},
+                },
             )
         body = r.json()
     except Exception as e:
@@ -67,3 +74,49 @@ async def deliver(incident: IncidentRecord, action: CoordinationAction) -> Tuple
     if body.get("ok"):
         return True, f"Delivered to {action.target_agency} on Telegram (message {body['result']['message_id']})"
     return False, f"Telegram refused: {body.get('description', r.status_code)}"
+
+
+AckHandler = Callable[[str, str, str], Awaitable[str]]
+
+
+async def handle_update(client: httpx.AsyncClient, base: str, update: dict, on_ack: AckHandler) -> None:
+    """One Telegram update: a tap on our Acknowledge button becomes the agency's ACK on the incident."""
+    cq = update.get("callback_query")
+    if not cq:
+        return
+    note = ""
+    data = str(cq.get("data", ""))
+    if data.startswith("ack:"):
+        _, incident_id, action_id = data.split(":", 2)
+        sender = cq.get("from", {})
+        who = sender.get("first_name") or sender.get("username") or "department"
+        try:
+            note = await on_ack(incident_id, action_id, who)
+        except Exception as e:
+            note = f"Not acknowledged: {e}"
+        msg = cq.get("message")
+        if msg and note.startswith("Acknowledged"):
+            await client.post(f"{base}/editMessageReplyMarkup", json={
+                "chat_id": msg["chat"]["id"],
+                "message_id": msg["message_id"],
+                "reply_markup": {"inline_keyboard": [[{"text": f"✅ Acknowledged by {who}", "callback_data": "done"}]]},
+            })
+    await client.post(f"{base}/answerCallbackQuery", json={"callback_query_id": cq["id"], "text": note[:190]})
+
+
+async def poll_acknowledgements(on_ack: AckHandler) -> None:
+    """Long-polls Telegram for Acknowledge taps for the life of the server (no public URL needed)."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return
+    base = f"https://api.telegram.org/bot{token}"
+    offset = 0
+    async with httpx.AsyncClient(timeout=40) as client:
+        while True:
+            try:
+                r = await client.get(f"{base}/getUpdates", params={"timeout": 30, "offset": offset, "allowed_updates": '["callback_query"]'})
+                for update in r.json().get("result", []):
+                    offset = update["update_id"] + 1  # advance first so one bad update can't loop forever
+                    await handle_update(client, base, update, on_ack)
+            except Exception:
+                await asyncio.sleep(5)  # network blip or Telegram hiccup: keep polling

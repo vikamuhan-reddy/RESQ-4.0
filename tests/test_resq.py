@@ -92,10 +92,10 @@ def test_guards():
     inc = orchestrator.create_incident("Fire Hazard", "en")
     fire = coordination_agent.create_action_proposal(inc, "NOTIFY_FIRE_RESCUE", "Fire 101")
     assert inc.state == IncidentState.ESCALATION_PENDING
-    assert_raises(Conflict, orchestrator.simulate_agency_acknowledgment, inc.incident_id, fire.action_id)
+    assert_raises(Conflict, orchestrator.record_agency_acknowledgment, inc.incident_id, fire.action_id)
     asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, fire.action_id, "Op"))
     assert_raises(Conflict, orchestrator.operator_approve_action, inc.incident_id, fire.action_id, "Op")
-    orchestrator.simulate_agency_acknowledgment(inc.incident_id, fire.action_id, "FIRE-1")
+    orchestrator.record_agency_acknowledgment(inc.incident_id, fire.action_id, "FIRE-1")
     ems = coordination_agent.create_action_proposal(inc, "DISPATCH_EMS", "Ambulance 108")
     asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, ems.action_id, "Op"))
     assert orchestrator.get_incident(inc.incident_id).state == IncidentState.ACKNOWLEDGED
@@ -277,10 +277,41 @@ def test_location_confirmation_and_dropped_call():
         main_module.find_candidates = real_find
 
 
+def test_telegram_acknowledge_button():
+    import backend.main as main_module
+    print(">>> 17. Telegram Acknowledge tap -> agency ACK on the incident; button replaced; second tap refused...")
+    inc = orchestrator.create_incident("Fire Hazard", "en")
+    act = coordination_agent.create_action_proposal(inc, "NOTIFY_FIRE_RESCUE", "Fire & Rescue (101)")
+    asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, act.action_id, "Op"))  # simulated delivery: no token in tests
+    calls = []
+
+    def fake_telegram(request):
+        calls.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        return httpx.Response(200, json={"ok": True, "result": True})
+
+    update = {"update_id": 1, "callback_query": {
+        "id": "cb1", "from": {"first_name": "Ravi"}, "data": f"ack:{inc.incident_id}:{act.action_id}",
+        "message": {"message_id": 7, "chat": {"id": -100}},
+    }}
+
+    async def tap_twice():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(fake_telegram)) as client:
+            for _ in range(2):
+                await dispatch_service.handle_update(client, "https://api.telegram.org/botX", update, main_module._on_telegram_ack)
+
+    asyncio.run(tap_twice())
+    a = orchestrator._find_action(orchestrator.get_incident(inc.incident_id), act.action_id)
+    assert a.status == ActionStatus.ACKNOWLEDGED and "Ravi" in a.acknowledgment_reference
+    assert orchestrator.get_incident(inc.incident_id).state == IncidentState.ACKNOWLEDGED
+    assert [name for name, _ in calls] == ["editMessageReplyMarkup", "answerCallbackQuery", "answerCallbackQuery"]
+    assert calls[1][1]["text"].startswith("Acknowledged") and calls[2][1]["text"].startswith("Not acknowledged")
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
     test_gemini_path()
     test_routing_and_dispatch()
     test_location_confirmation_and_dropped_call()
+    test_telegram_acknowledge_button()
     print("ALL CHECKS PASSED")

@@ -316,7 +316,7 @@ class OrchestrationEngine:
         delivered, note = await dispatch_service.deliver(self.get_incident(incident_id), action)
         return self.record_delivery(incident_id, action_id, delivered, note)
 
-    def simulate_agency_acknowledgment(self, incident_id: str, action_id: str, responder_ref: str = "DISPATCH-UNIT-704") -> CoordinationAction:
+    def record_agency_acknowledgment(self, incident_id: str, action_id: str, responder_ref: str = "DISPATCH-UNIT-704") -> CoordinationAction:
         """
         Simulates agency response lifecycle: SENT -> ACKNOWLEDGED -> ASSIGNED
         """
