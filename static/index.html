@@ -3,380 +3,276 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RESQ 4.0 | Failure-Aware Agentic Emergency Intelligence Platform</title>
-    <!-- Tailwind CSS CDN -->
+    <title>RESQ Command Centre</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f43f5e'/%3E%3Cpath d='M16 7v18M7 16h18' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- Leaflet CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body class="min-h-screen flex flex-col bg-[#070b14] text-slate-100">
+<body class="lg:h-screen flex flex-col lg:overflow-hidden">
 
-    <!-- Top Command Header -->
-    <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-50 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+    <!-- ===================== Top bar ===================== -->
+    <header class="topbar shrink-0 px-5 py-3 flex flex-wrap items-center gap-x-4 gap-y-3">
         <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center shadow-lg shadow-cyan-500/25">
-                <i class="fas fa-shield-halved text-white text-xl"></i>
-            </div>
+            <div class="logo-mark"><i class="fas fa-tower-broadcast"></i></div>
             <div>
-                <div class="flex items-center gap-2">
-                    <h1 class="text-xl font-extrabold tracking-tight text-white">RESQ <span class="text-cyan-400">4.0</span></h1>
-                    <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-950 border border-cyan-800 text-cyan-400 font-mono">CONTINUITY ENGINE</span>
-                </div>
-                <p class="text-xs text-slate-400 font-medium">Listen. Understand. Validate. Recover. Coordinate. Escalate. Learn.</p>
+                <h1 class="text-[17px] font-extrabold tracking-tight leading-none">RESQ <span class="text-cyan-400">Command Centre</span></h1>
+                <p class="hidden 2xl:block text-[11px] text-slate-400 mt-1">AI co-pilot for emergency call-takers · Chennai</p>
             </div>
         </div>
 
-        <!-- Quick Action Triggers -->
+        <!-- Live numbers -->
+        <div class="flex items-stretch gap-2">
+            <div class="stat"><span id="stat-open" class="stat-num">0</span><span class="stat-label">Open calls</span></div>
+            <div class="stat stat-red"><span id="stat-critical" class="stat-num">0</span><span class="stat-label">Critical</span></div>
+            <div class="stat stat-amber"><span id="stat-pending" class="stat-num">0</span><span class="stat-label">Awaiting dispatch</span></div>
+            <div class="stat stat-green"><span id="stat-sent" class="stat-num">0</span><span class="stat-label">Units notified</span></div>
+        </div>
+
+        <div class="flex-1"></div>
+
+        <!-- Which AI services are live -->
+        <div class="flex items-center gap-1.5" title="Services switch themselves off when their key is missing">
+            <span id="svc-gemini" class="svc"><i class="fas fa-wand-magic-sparkles"></i><span class="hidden 2xl:inline">Gemini</span></span>
+            <span id="svc-lyzr" class="svc"><i class="fas fa-file-medical"></i><span class="hidden 2xl:inline">Lyzr</span></span>
+            <span id="svc-band" class="svc"><i class="fas fa-people-arrows"></i><span class="hidden 2xl:inline">BAND</span></span>
+            <span id="svc-telegram" class="svc"><i class="fab fa-telegram"></i><span class="hidden 2xl:inline">Telegram</span></span>
+        </div>
+
+        <span class="sim-pill" title="Every dispatch is marked SIMULATION. No real agency is contacted."><i class="fas fa-flask"></i> Simulation</span>
+
         <div class="flex items-center gap-2">
-            <a href="/caller" target="_blank" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-                <i class="fas fa-mobile-screen"></i> Caller screen
-            </a>
-            <button onclick="createNewIncident()" class="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold shadow-md shadow-cyan-900/30 flex items-center gap-1.5 transition">
-                <i class="fas fa-plus"></i> New Incident
-            </button>
+            <a href="/caller" target="_blank" class="btn btn-ghost" title="Open the caller's phone screen"><i class="fas fa-mobile-screen"></i><span class="hidden 2xl:inline"> Caller screen</span></a>
+            <button onclick="createNewIncident()" class="btn btn-primary"><i class="fas fa-phone-volume"></i> New call</button>
         </div>
     </header>
 
-    <!-- Emergency Voice Intake Bar -->
-    <section class="bg-slate-900/60 border-b border-slate-800/80 px-6 py-3">
-        <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center gap-3">
-            <!-- Language Selector -->
-            <div class="flex items-center gap-2 shrink-0">
-                <span class="text-xs text-slate-400 font-semibold"><i class="fas fa-language text-cyan-400 mr-1"></i> Language:</span>
-                <select id="voice-lang-select" class="bg-slate-950 border border-slate-700 text-xs text-slate-200 rounded-lg px-2.5 py-1.5 focus:border-cyan-500 outline-none">
-                    <option value="en">English (India / Global)</option>
-                    <option value="ta" selected>தமிழ் (Tamil)</option>
-                </select>
-            </div>
+    <div class="flex-1 flex flex-col lg:flex-row min-h-0">
 
-            <!-- Waveform Canvas -->
-            <div class="w-40 h-8 shrink-0 hidden sm:block">
-                <canvas id="waveform-canvas" width="160" height="32" class="w-full h-full rounded border border-slate-800"></canvas>
-            </div>
-
-            <!-- Push to talk button -->
-            <button id="btn-record" class="px-3.5 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg flex items-center font-semibold text-xs transition shrink-0">
-                <i class="fas fa-microphone mr-2"></i> Push to Talk
-            </button>
-
-            <!-- Text input fallback -->
-            <div class="flex-1 w-full flex items-center gap-2">
-                <input id="voice-transcript-input" type="text" placeholder="Speak into mic or type emergency statement (e.g. அண்ணா மேம்பாலம் அருகே விபத்து...)" 
-                    class="w-full bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg px-3 py-2 focus:border-cyan-500 outline-none font-mono">
-                <button id="btn-submit-intake" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-800/60 rounded-lg text-xs font-bold shrink-0 transition">
-                    <i class="fas fa-paper-plane mr-1"></i> Submit Intake
-                </button>
-                <span id="call-target" class="shrink-0 text-[11px] font-mono"></span>
-            </div>
-
-            <!-- Sample Utterance Chips -->
-            <div class="hidden xl:flex items-center gap-1.5 shrink-0 text-[11px]">
-                <button onclick="document.getElementById('voice-transcript-input').value = 'வணக்கம், அண்ணா மேம்பாலம் அருகே ஒரு பெரிய விபத்து. இரண்டு பேர் பலத்த காயமடைந்துள்ளனர். நான் இங்க இல்ல, என் அலுவலகத்திலிருந்து பார்க்கிறேன்.'; document.getElementById('voice-lang-select').value='ta';" 
-                    class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-                    Tamil Road Accident
-                </button>
-                <button onclick="document.getElementById('voice-transcript-input').value = 'Help! Major car collision near the bridge. Two people are bleeding. I am driving past, not at the scene.'; document.getElementById('voice-lang-select').value='en';" 
-                    class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">
-                    English Crash
-                </button>
-            </div>
-        </div>
-    </section>
-
-    <!-- Main Navigation Bar -->
-    <nav class="bg-slate-950/80 border-b border-slate-800 px-6 py-2">
-        <div class="max-w-7xl mx-auto flex items-center justify-between">
-            <div class="flex items-center gap-2">
-                <button data-tab="queue" class="px-4 py-2 text-sm font-semibold rounded-lg bg-cyan-600 text-white shadow-lg shadow-cyan-900/30 transition flex items-center gap-2">
-                    <i class="fas fa-list-ul"></i> Incident Queue <span id="queue-count" class="ml-1 px-1.5 py-0.2 rounded-full bg-cyan-950 border border-cyan-700 text-[10px]">0</span>
-                </button>
-                <button data-tab="detail" class="px-4 py-2 text-sm font-semibold rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition flex items-center gap-2">
-                    <i class="fas fa-radar"></i> Incident Detail & Agents
-                </button>
-            </div>
-
-            <!-- Active Incident Pill -->
-            <div class="hidden md:flex items-center gap-2 text-xs font-mono">
-                <span class="text-slate-400">Active Incident:</span>
-                <span id="detail-id" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-cyan-300 font-bold">INC-NONE</span>
-            </div>
-        </div>
-    </nav>
-
-    <!-- Main Content Body -->
-    <main class="flex-1 max-w-7xl w-full mx-auto p-6">
-
-        <!-- ==================== TAB 1: INCIDENT QUEUE ==================== -->
-        <div id="tab-queue" class="space-y-4">
-            <div class="flex items-center justify-between">
+        <!-- ===================== Queue ===================== -->
+        <aside class="queue-pane shrink-0 lg:w-[330px] flex flex-col min-h-0">
+            <div class="px-4 pt-4 pb-3 flex items-center justify-between">
                 <div>
-                    <h2 class="text-lg font-bold text-slate-100">Central Emergency Queue</h2>
-                    <p class="text-xs text-slate-400">Real-time incident stream with connection integrity and location verification status.</p>
+                    <h2 class="pane-title">Live queue</h2>
+                    <p class="text-[11px] text-slate-500">Newest first · updates in real time</p>
                 </div>
-                <div class="flex items-center gap-3">
-                    <button onclick="createNewIncident('Other Emergency', 'ta')" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-xs font-bold">
-                        <i class="fas fa-plus mr-1"></i> Tamil Intake
-                    </button>
-                    <button onclick="createNewIncident('Other Emergency', 'en')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold">
-                        <i class="fas fa-plus mr-1"></i> English Intake
-                    </button>
-                </div>
+                <span id="queue-count" class="count-pill">0</span>
             </div>
+            <div id="queue-list" class="flex-1 overflow-y-auto px-3 pb-4 space-y-2 max-h-[40vh] lg:max-h-none"></div>
+        </aside>
 
-            <!-- Incidents Table -->
-            <div class="resq-card overflow-hidden">
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left border-collapse">
-                        <thead>
-                            <tr class="border-b border-slate-800 bg-slate-900/80 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
-                                <th class="py-3 px-4">Incident ID</th>
-                                <th class="py-3 px-4">Category</th>
-                                <th class="py-3 px-4">Urgency</th>
-                                <th class="py-3 px-4">Connection</th>
-                                <th class="py-3 px-4">Incident Location</th>
-                                <th class="py-3 px-4">Location Reliability</th>
-                                <th class="py-3 px-4">Lifecycle State</th>
-                                <th class="py-3 px-4">Assigned Operator</th>
-                            </tr>
-                        </thead>
-                        <tbody id="queue-tbody" class="divide-y divide-slate-800/60 text-xs">
-                            <!-- Injected by JavaScript -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+        <!-- ===================== Workspace ===================== -->
+        <main class="flex-1 overflow-y-auto min-h-0">
+            <div class="max-w-[1500px] mx-auto p-4 lg:p-5 space-y-4">
 
-        <!-- ==================== TAB 2: INCIDENT DETAIL & AGENTS ==================== -->
-        <div id="tab-detail" class="hidden space-y-6">
-            <!-- Incident Header & Operational Controls -->
-            <div class="resq-card p-5 flex flex-wrap items-center justify-between gap-4">
-                <div class="flex items-center gap-4">
-                    <div>
-                        <div class="flex items-center gap-2">
-                            <span id="detail-category" class="text-lg font-extrabold text-white">Road Accident</span>
-                            <span id="detail-state" class="px-2.5 py-0.5 rounded text-xs font-bold bg-slate-800 border border-slate-700 text-cyan-300">RECEIVED</span>
-                            <span id="detail-conn" class="px-2.5 py-0.5 rounded text-xs font-bold badge-verified">CONNECTED</span>
-                            <span id="detail-timer" class="px-2.5 py-0.5 rounded text-xs font-bold font-mono"></span>
-                        </div>
-                    </div>
+                <!-- Empty state -->
+                <div id="detail-empty" class="card p-10 text-center">
+                    <div class="logo-mark mx-auto mb-4 !w-14 !h-14 text-2xl"><i class="fas fa-headset"></i></div>
+                    <h2 class="text-lg font-bold">No call selected</h2>
+                    <p class="text-sm text-slate-400 mt-1">Start a <strong>New call</strong>, or speak / type a caller's words in the call console below.</p>
                 </div>
 
-                <!-- Operator Actions Bar -->
-                <div class="flex flex-wrap items-center gap-2">
-                    <button onclick="continueCall()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-700/50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition" title="Send the next statements to this incident (e.g. a callback)">
-                        <i class="fas fa-phone-volume"></i> Continue this call
-                    </button>
-                    <button onclick="acknowledgeCurrentIncident()" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition">
-                        <i class="fas fa-check"></i> Acknowledge
-                    </button>
-                    <button onclick="proposeAction('DISPATCH_EMS', 'Ambulance (108)')" class="px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-                        <i class="fas fa-ambulance"></i> Ambulance
-                    </button>
-                    <button onclick="proposeAction('NOTIFY_FIRE_RESCUE', 'Fire & Rescue (101)')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-                        <i class="fas fa-fire-extinguisher"></i> Fire
-                    </button>
-                    <button onclick="proposeAction('ALERT_POLICE', 'Police (100)')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-                        <i class="fas fa-shield-halved"></i> Police
-                    </button>
-                    <button onclick="proposeAction('ALERT_TRAFFIC_POLICE', 'Traffic Police')" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
-                        <i class="fas fa-traffic-light"></i> Traffic
-                    </button>
-                </div>
-            </div>
-
-            <!-- Failure Simulator Toolbar -->
-            <div class="p-3.5 bg-slate-950 border border-red-900/40 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-inner">
-                <div class="flex items-center gap-2">
-                    <span class="w-2.5 h-2.5 rounded-full bg-red-500 pulse-red"></span>
-                    <span class="text-xs font-bold uppercase tracking-wider text-red-400 font-mono">Call Simulator:</span>
-                </div>
-                <div class="flex flex-wrap items-center gap-2">
-                    <button onclick="simulateCallerDisconnect()" class="px-3 py-1 bg-purple-950/80 hover:bg-purple-900 text-purple-300 border border-purple-700 rounded text-xs font-semibold transition">
-                        <i class="fas fa-phone-slash mr-1"></i> Disconnect Caller
-                    </button>
-                </div>
-            </div>
-
-            <!-- The call itself, turn by turn (stored in the call_turns table) -->
-            <div class="resq-card p-4 space-y-2">
-                <div class="flex items-center justify-between">
-                    <div class="flex items-center gap-2">
-                        <i class="fas fa-comments text-cyan-400"></i>
-                        <h3 class="font-bold text-sm text-slate-100">Call conversation</h3>
-                    </div>
-                    <span class="text-[10px] font-mono text-slate-500">every turn is stored</span>
-                </div>
-                <div id="conversation" class="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-sm"></div>
-            </div>
-
-            <!-- Dual-Location Intelligence & Leaflet Map Grid -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <!-- Dual-Location Comparison Card -->
-                <div class="resq-card p-5 space-y-4">
-                    <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                        <div class="flex items-center gap-2">
-                            <i class="fas fa-location-crosshairs text-cyan-400"></i>
-                            <h3 class="font-bold text-sm text-slate-100">Dual-Location Intelligence</h3>
-                        </div>
-                        <span id="loc-separation-badge" class="hidden px-2.5 py-0.5 rounded text-[11px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
-                            SEPARATION DETECTED
-                        </span>
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <!-- Caller Location -->
-                        <div class="p-3 bg-slate-900/90 rounded-lg border border-slate-800">
-                            <div class="flex items-center justify-between mb-1.5">
-                                <span class="text-xs font-bold text-cyan-400 font-mono">CALLER LOCATION</span>
-                                <span id="loc-caller-status" class="px-2 py-0.5 rounded text-[10px] font-bold badge-inferred">CALLER_REPORTED</span>
+                <!-- Incident header -->
+                <section id="detail-view" class="card p-4 hidden">
+                    <div class="flex flex-wrap items-center gap-4">
+                        <div id="detail-icon" class="cat-icon"><i class="fas fa-triangle-exclamation"></i></div>
+                        <div class="min-w-0">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h2 id="detail-category" class="text-xl font-extrabold tracking-tight">—</h2>
+                                <span id="detail-urgency" class="chip">—</span>
+                                <span id="detail-state" class="chip chip-slate">—</span>
+                                <span id="detail-conn" class="chip chip-green">CONNECTED</span>
                             </div>
-                            <div id="loc-caller-desc" class="text-sm font-semibold text-slate-200">Pending caller intake</div>
-                            <div class="text-[11px] text-slate-500 mt-2">Precision: <strong id="loc-caller-precision" class="text-slate-400">Approximate</strong></div>
-                        </div>
-
-                        <!-- Incident Location -->
-                        <div class="p-3 bg-slate-900/90 rounded-lg border border-slate-800">
-                            <div class="flex items-center justify-between mb-1.5">
-                                <span class="text-xs font-bold text-red-400 font-mono">INCIDENT LOCATION</span>
-                                <span id="loc-incident-status" class="px-2 py-0.5 rounded text-[10px] font-bold badge-uncertain">UNCERTAIN</span>
+                            <div class="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-slate-400">
+                                <span id="detail-id" class="font-mono text-cyan-300">INC-NONE</span>
+                                <span id="detail-location" class="truncate max-w-[420px]"><i class="fas fa-location-dot mr-1"></i>—</span>
                             </div>
-                            <div id="loc-incident-desc" class="text-sm font-semibold text-slate-200">Pending incident intake</div>
-                            <div class="text-[11px] text-slate-500 mt-2">Precision: <strong id="loc-incident-precision" class="text-slate-400">Landmark / Approximate</strong></div>
                         </div>
+                        <div class="flex-1"></div>
+                        <span id="detail-timer" class="timer"></span>
                     </div>
 
-                    <!-- Adaptive Follow-Up Question Card -->
-                    <div id="follow-up-card" class="p-3.5 bg-gradient-to-r from-cyan-950/40 to-slate-900 rounded-lg border border-cyan-800/60 hidden space-y-2">
+                    <div class="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-white/5">
+                        <button onclick="continueCall()" class="btn btn-ghost" title="Send the next statements to this incident (e.g. a callback)"><i class="fas fa-phone-volume"></i> Continue<span class="hidden 2xl:inline"> this</span> call</button>
+                        <button onclick="acknowledgeCurrentIncident()" class="btn btn-ghost"><i class="fas fa-user-check"></i> Take ownership</button>
+                        <button onclick="simulateCallerDisconnect()" class="btn btn-ghost text-violet-300" title="Demo: the caller's line drops mid-call"><i class="fas fa-phone-slash"></i><span class="hidden 2xl:inline"> Simulate</span> Drop call</button>
+                        <div class="flex-1"></div>
+                        <span class="hidden 2xl:inline text-[11px] uppercase tracking-wider text-slate-500 font-semibold mr-1">Add department</span>
+                        <button onclick="proposeAction('DISPATCH_EMS', 'Ambulance (108)')" class="btn btn-dept"><i class="fas fa-truck-medical text-rose-300"></i> Ambulance</button>
+                        <button onclick="proposeAction('NOTIFY_FIRE_RESCUE', 'Fire & Rescue (101)')" class="btn btn-dept"><i class="fas fa-fire-extinguisher text-orange-300"></i> Fire</button>
+                        <button onclick="proposeAction('ALERT_POLICE', 'Police (100)')" class="btn btn-dept"><i class="fas fa-shield-halved text-sky-300"></i> Police</button>
+                        <button onclick="proposeAction('ALERT_TRAFFIC_POLICE', 'Traffic Police')" class="btn btn-dept"><i class="fas fa-traffic-light text-amber-300"></i> Traffic</button>
+                    </div>
+                </section>
+
+                <!-- Call console: what the caller says goes in here -->
+                <section class="card p-4 console">
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="section-icon bg-cyan-500/15 text-cyan-300"><i class="fas fa-microphone-lines"></i></span>
+                            <h3 class="section-title">Call console</h3>
+                            <span id="call-target" class="text-[11px] font-mono ml-2"></span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-[11px]">
+                            <span class="text-slate-500 mr-1">Try:</span>
+                            <button class="sample" onclick="fillSample('வணக்கம், அண்ணா மேம்பாலம் அருகே ஒரு பெரிய விபத்து. இரண்டு பேர் பலத்த காயமடைந்துள்ளனர். நான் இங்க இல்ல, என் அலுவலகத்திலிருந்து பார்க்கிறேன்.', 'ta')">Tamil crash</button>
+                            <button class="sample" onclick="fillSample('Fire in a textile shop near Vadapalani signal, one man has burns on his arm and there is a lot of smoke.', 'en')">English fire</button>
+                            <button class="sample" onclick="fillSample('Egmore station platform la oru periyavar collapse aagitaaru, breathing sariya illa, seekiram vaanga', 'en')">Tanglish medical</button>
+                        </div>
+                    </div>
+                    <div class="flex flex-col md:flex-row items-stretch md:items-center gap-2">
+                        <select id="voice-lang-select" class="field md:w-36">
+                            <option value="ta" selected>தமிழ் Tamil</option>
+                            <option value="en">English</option>
+                        </select>
+                        <button id="btn-record" class="btn btn-mic"><i class="fas fa-microphone"></i> Push to talk</button>
+                        <canvas id="waveform-canvas" width="160" height="38" class="hidden sm:block w-40 h-[38px] shrink-0"></canvas>
+                        <input id="voice-transcript-input" type="text" class="field flex-1" placeholder="Speak, or type what the caller says (Tamil, English or mixed)…">
+                        <button id="btn-submit-intake" class="btn btn-primary"><i class="fas fa-bolt"></i> Analyse</button>
+                    </div>
+                    <div id="voice-status" class="voice-status"></div>
+                </section>
+
+                <div id="detail-body" class="space-y-4 hidden">
+                <!-- Conversation + next question -->
+                <section class="card p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <div class="flex items-center gap-2">
+                            <span class="section-icon bg-sky-500/15 text-sky-300"><i class="fas fa-comments"></i></span>
+                            <h3 class="section-title">Conversation</h3>
+                        </div>
+                        <span class="text-[11px] text-slate-500">every turn is stored</span>
+                    </div>
+                    <div id="follow-up-card" class="ask-next hidden">
+                        <div class="flex items-start gap-3">
+                            <span class="section-icon bg-cyan-400/20 text-cyan-200 shrink-0"><i class="fas fa-circle-question"></i></span>
+                            <div class="flex-1 min-w-0">
+                                <div class="text-[11px] uppercase tracking-wider font-bold text-cyan-300">Ask the caller next</div>
+                                <p id="follow-up-text" class="text-[15px] font-semibold text-white mt-0.5"></p>
+                                <p id="follow-up-rationale" class="text-[11px] text-slate-400 mt-0.5"></p>
+                            </div>
+                            <button id="btn-speak-question" class="btn btn-primary !py-1.5 shrink-0"><i class="fas fa-volume-high"></i> Speak</button>
+                        </div>
+                    </div>
+                    <div id="conversation" class="space-y-2 max-h-64 overflow-y-auto pr-1 text-sm mt-3"></div>
+                </section>
+
+                <!-- Location + extracted details -->
+                <div class="grid grid-cols-1 xl:grid-cols-12 gap-4">
+                    <section class="card p-4 xl:col-span-7 space-y-3">
                         <div class="flex items-center justify-between">
-                            <span class="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
-                                <i class="fas fa-circle-question text-cyan-400"></i> Voice Agent Adaptive Follow-up
-                            </span>
-                            <button id="btn-speak-question" class="px-2 py-0.5 rounded bg-cyan-800 hover:bg-cyan-700 text-white text-[10px] font-semibold flex items-center gap-1">
-                                <i class="fas fa-volume-high"></i> Speak
-                            </button>
+                            <div class="flex items-center gap-2">
+                                <span class="section-icon bg-rose-500/15 text-rose-300"><i class="fas fa-location-crosshairs"></i></span>
+                                <h3 class="section-title">Location</h3>
+                            </div>
+                            <span id="loc-separation-badge" class="chip chip-cyan hidden">CALLER AWAY FROM SCENE</span>
                         </div>
-                        <p id="follow-up-text" class="text-sm font-semibold text-white italic">"Can you identify the nearest road, building, or landmark?"</p>
-                        <p id="follow-up-rationale" class="text-[11px] text-slate-400">Rationale: Target incident landmark uncertainty</p>
-                    </div>
-
-                    <!-- Interactive Map -->
-                    <div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div class="loc-box loc-incident">
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="loc-label text-rose-300"><i class="fas fa-burst mr-1"></i>Incident</span>
+                                    <span id="loc-incident-status" class="chip chip-amber">UNCERTAIN</span>
+                                </div>
+                                <div id="loc-incident-desc" class="text-sm font-semibold">Pending</div>
+                                <div class="text-[11px] text-slate-500 mt-1">Precision: <span id="loc-incident-precision" class="text-slate-400">—</span></div>
+                            </div>
+                            <div class="loc-box loc-caller">
+                                <div class="flex items-center justify-between mb-1">
+                                    <span class="loc-label text-cyan-300"><i class="fas fa-user mr-1"></i>Caller</span>
+                                    <span id="loc-caller-status" class="chip chip-cyan">—</span>
+                                </div>
+                                <div id="loc-caller-desc" class="text-sm font-semibold">Pending</div>
+                                <div class="text-[11px] text-slate-500 mt-1">Precision: <span id="loc-caller-precision" class="text-slate-400">—</span></div>
+                            </div>
+                        </div>
                         <div id="incident-map"></div>
-                        <div class="flex items-start justify-between gap-3 mt-1.5">
-                            <p id="map-notice" class="hidden text-[11px] text-amber-300"></p>
-                            <button onclick="findLocationOnMap()" class="shrink-0 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-800/60 rounded text-[11px] font-semibold">
-                                <i class="fas fa-magnifying-glass-location mr-1"></i> Find on map
-                            </button>
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <p id="map-notice" class="hidden text-[12px] text-amber-300"></p>
+                                <p class="text-[11px] text-slate-500">Click the map to place the incident yourself. A pin is only <em>confirmed</em> once an operator says so.</p>
+                            </div>
+                            <button onclick="findLocationOnMap()" class="btn btn-ghost shrink-0"><i class="fas fa-magnifying-glass-location"></i> Find on map</button>
                         </div>
-                        <p class="text-[10px] text-slate-500 mt-1">Or click the map to place the incident yourself.</p>
-                    </div>
+                    </section>
+
+                    <section class="card p-4 xl:col-span-5 flex flex-col">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="section-icon bg-violet-500/15 text-violet-300"><i class="fas fa-fingerprint"></i></span>
+                                <h3 class="section-title">What we know</h3>
+                            </div>
+                            <span class="text-[11px] text-slate-500">source · confidence · verified?</span>
+                        </div>
+                        <div id="fields-container" class="space-y-2 flex-1 overflow-y-auto pr-1 max-h-[460px]"></div>
+                    </section>
                 </div>
 
-                <!-- Structured Fields & Information Provenance -->
-                <div class="resq-card p-5 space-y-4">
-                    <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <!-- Agents: reasoning, dispatch, audit trail -->
+                <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                    <section class="card p-4 space-y-3">
                         <div class="flex items-center gap-2">
-                            <i class="fas fa-fingerprint text-purple-400"></i>
-                            <h3 class="font-bold text-sm text-slate-100">Information Provenance & Reliability</h3>
+                            <span class="section-icon bg-amber-500/15 text-amber-300"><i class="fas fa-brain"></i></span>
+                            <h3 class="section-title">Reasoning agent</h3>
                         </div>
-                        <span class="text-xs text-slate-400 font-mono">Confidence ≠ Verification</span>
-                    </div>
-
-                    <div id="fields-container" class="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                        <!-- Injected by JavaScript -->
-                    </div>
-                </div>
-            </div>
-
-            <!-- Multi-Agent Reasoning & Coordination Grid -->
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <!-- Agent 2: Incident Reasoning Agent -->
-                <div class="resq-card p-5 space-y-3">
-                    <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
-                        <i class="fas fa-brain text-amber-400"></i>
-                        <h3 class="font-bold text-sm text-slate-100">Incident Reasoning Agent</h3>
-                    </div>
-
-                    <div class="space-y-3">
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Urgency Indicators & Explanation:</span>
-                            <p id="reasoning-urgency" class="text-xs text-slate-200 mt-1 p-2 rounded bg-slate-900 border border-slate-800"></p>
+                            <div class="sub-label">Why this urgency</div>
+                            <p id="reasoning-urgency" class="text-sm text-slate-200 mt-1"></p>
                         </div>
-
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Intake Completeness:</span>
+                            <div class="sub-label">Intake completeness</div>
                             <div id="reasoning-completeness"></div>
                         </div>
-
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Missing Critical Fields:</span>
+                            <div class="sub-label">Still missing</div>
                             <div id="reasoning-missing" class="flex flex-wrap gap-1.5 mt-1"></div>
                         </div>
-
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Contradictions Detected:</span>
+                            <div class="sub-label">Contradictions</div>
                             <div id="reasoning-contradictions" class="mt-1 space-y-1"></div>
                         </div>
-
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Possible Duplicate Reports:</span>
+                            <div class="sub-label">Possible duplicate reports</div>
                             <div id="reasoning-duplicates" class="mt-1 space-y-1.5"></div>
                         </div>
-
                         <div>
-                            <span class="text-[11px] font-bold uppercase text-slate-400 font-mono">Operator Recommendations:</span>
-                            <ul id="reasoning-recs" class="list-disc list-inside mt-1 space-y-1"></ul>
+                            <div class="sub-label">Recommended next steps</div>
+                            <ul id="reasoning-recs" class="mt-1 space-y-1"></ul>
                         </div>
-                    </div>
-                </div>
+                    </section>
 
-                <!-- Agent 3: Coordination Agent Actions -->
-                <div class="resq-card p-5 space-y-3">
-                    <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
-                        <i class="fas fa-network-wired text-cyan-400"></i>
-                        <h3 class="font-bold text-sm text-slate-100">Coordination & Idempotency Agent</h3>
-                    </div>
-
-                    <div class="text-xs text-slate-400">
-                        Workflow: <strong class="text-slate-300">Created → Sent → ACK</strong>.
-                        A repeated request with the same key returns the existing action.
-                    </div>
-
-                    <div id="coordination-actions-list" class="space-y-2.5 max-h-[340px] overflow-y-auto">
-                        <!-- Injected by JavaScript -->
-                    </div>
-                </div>
-
-                <!-- Auditable Timeline & Event Stream -->
-                <div class="resq-card p-5 space-y-3">
-                    <div class="flex items-center justify-between border-b border-slate-800 pb-3">
-                        <div class="flex items-center gap-2">
-                            <i class="fas fa-clock-rotate-left text-emerald-400"></i>
-                            <h3 class="font-bold text-sm text-slate-100">Auditable Event Timeline</h3>
+                    <section class="card p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="section-icon bg-emerald-500/15 text-emerald-300"><i class="fas fa-paper-plane"></i></span>
+                                <h3 class="section-title">Dispatch</h3>
+                            </div>
+                            <span class="text-[11px] text-slate-500">human confirms every dispatch</span>
                         </div>
-                    </div>
+                        <div id="coordination-actions-list" class="space-y-2.5 max-h-[520px] overflow-y-auto pr-1"></div>
+                    </section>
 
-                    <div id="timeline-container" class="space-y-2 max-h-[340px] overflow-y-auto pr-1">
-                        <!-- Injected by JavaScript -->
-                    </div>
+                    <section class="card p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="section-icon bg-slate-400/15 text-slate-200"><i class="fas fa-clock-rotate-left"></i></span>
+                                <h3 class="section-title">Agent activity</h3>
+                            </div>
+                            <span class="text-[11px] text-slate-500">audit trail, newest first</span>
+                        </div>
+                        <div id="timeline-container" class="timeline max-h-[520px] overflow-y-auto pr-1"></div>
+                    </section>
                 </div>
+                </div>
+
+                <footer class="text-center text-[11px] text-slate-600 py-3">
+                    RESQ · built for calls where the line may drop, the AI may fail, and the incident still matters
+                </footer>
             </div>
-        </div>
+        </main>
+    </div>
 
-    </main>
-
-    <!-- Footer -->
-    <footer class="border-t border-slate-800/80 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500 font-mono">
-        RESQ 4.0 Prototype • "Built for emergencies where communication may fail, technology may fail, and the incident still matters."
-    </footer>
-
-    <!-- App JavaScript Modules -->
     <script src="/static/js/api.js"></script>
     <script src="/static/js/map.js"></script>
     <script src="/static/js/voice_recorder.js"></script>

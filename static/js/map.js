@@ -20,10 +20,9 @@ class IncidentMapController {
         // Default center: Chennai Anna Flyover (13.0524, 80.2508)
         this.map = L.map(this.elementId).setView([13.0524, 80.2508], 13);
 
-        // Dark theme map tiles (CartoDB Dark Matter)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-            subdomains: 'abcd',
+        // OpenStreetMap tiles (no key needed); style.css darkens them to match the dashboard
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
             maxZoom: 19
         }).addTo(this.map);
     }

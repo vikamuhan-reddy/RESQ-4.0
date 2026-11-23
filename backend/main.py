@@ -28,7 +28,7 @@ from backend.agents.reasoning_agent import reasoning_agent, place_words
 from backend.agents.coordination_agent import coordination_agent
 from backend.services.gemini_service import transcribe_audio as gemini_transcribe, warm_up as gemini_warm_up
 from backend.services.geocoding_service import find_candidates
-from backend.services import dispatch_service
+from backend.services import dispatch_service, band_service, lyzr_service
 from backend.models.enums import VerificationStatus, ActionStatus
 from backend.models.incident import TimelineEvent
 
@@ -100,6 +100,14 @@ async def _after_intake(incident_id: str, action_ids: List[str]):
             await broadcast_event("PRE_ALERT", db_engine.get_incident(incident_id).model_dump())
     except Exception as e:
         print(f"[after-intake] {incident_id}: {type(e).__name__}: {e}")
+
+async def _after_dispatch(incident_id: str, action_id: str):
+    """The Lyzr crew brief follows the dispatch; the dispatch never waits for it."""
+    try:
+        if await orchestrator.send_handover_brief(incident_id, action_id):
+            await broadcast_event("HANDOVER_BRIEF", db_engine.get_incident(incident_id).model_dump())
+    except Exception as e:
+        print(f"[after-dispatch] {incident_id}: {type(e).__name__}: {e}")
 
 NOMINATIM_GAP_S = 1.1  # Nominatim usage policy: at most 1 request per second
 
@@ -239,7 +247,15 @@ async def health_check():
         "platform": "RESQ 4.0",
         "tagline": "Listen. Understand. Validate. Recover. Coordinate. Escalate. Learn.",
         "incidents_count": len(db_engine.list_incidents()),
-        "continuity_engine": "ACTIVE"
+        "continuity_engine": "ACTIVE",
+        # Which services are switched on (keys present); BAND also reports whether it actually connected
+        "integrations": {
+            "gemini": bool(os.getenv("GEMINI_API_KEY")),
+            "lyzr": lyzr_service.enabled(),
+            "band": band_service.status,
+            "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+        },
+        "dispatch_mode": DISPATCH_MODE,
     }
 
 # ----------------- Incidents Management -----------------
@@ -339,7 +355,9 @@ async def approve_coordination_action(incident_id: str, req: ApproveActionReques
     action.is_simulation = (DISPATCH_MODE != "live")
     action.dispatch_mode = DISPATCH_MODE
     db_engine.save_action(action)
-    
+    if action.status == ActionStatus.SENT:
+        _spawn(_after_dispatch(incident_id, action.action_id))
+
     updated_inc = db_engine.get_incident(incident_id)
     await broadcast_event("ACTION_APPROVED", {
         **updated_inc.model_dump(),
@@ -450,6 +468,7 @@ async def _on_telegram_ack(incident_id: str, action_id: str, who: str) -> str:
 @app.on_event("startup")
 async def startup_event():
     app.state.telegram_ack_task = asyncio.create_task(dispatch_service.poll_acknowledgements(_on_telegram_ack))
+    app.state.band_task = asyncio.create_task(band_service.run())  # no-op without BAND keys
     # Load the Gemini SDK and open its connection now, not during the first live call
     if os.getenv("GEMINI_API_KEY"):
         await asyncio.to_thread(importlib.import_module, "google.genai")
@@ -458,3 +477,4 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     app.state.telegram_ack_task.cancel()
+    app.state.band_task.cancel()

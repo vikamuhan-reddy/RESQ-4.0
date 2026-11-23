@@ -23,7 +23,7 @@ from backend.models.enums import (
     IncidentCategory
 )
 from backend.core.persistence import db_engine
-from backend.services import dispatch_service
+from backend.services import dispatch_service, lyzr_service
 
 class NotFound(Exception):
     """Maps to HTTP 404."""
@@ -400,6 +400,37 @@ class OrchestrationEngine:
         action = self.operator_approve_action(incident_id, action_id, operator_id)
         delivered, note, _ = await dispatch_service.deliver(self.get_incident(incident_id), action)
         return self.record_delivery(incident_id, action_id, delivered, note)
+
+    async def send_handover_brief(self, incident_id: str, action_id: str) -> bool:
+        """
+        After a confirmed dispatch: the Lyzr agent writes a crew brief, sent as a follow-up in the
+        department's thread and kept on the timeline. Returns True if a brief was produced.
+        """
+        if not lyzr_service.enabled():
+            return False
+        incident = self.get_incident(incident_id)
+        act = self._find_action(incident, action_id)
+        transcript = "\n".join(f"{'Caller' if t['speaker'] == 'caller' else 'RESQ'}: {t['text']}" for t in db_engine.get_turns(incident_id))
+        try:
+            brief = await lyzr_service.handover_brief(incident_id, dispatch_service.format_message(incident, act), transcript)
+        except Exception as e:
+            brief, error = None, type(e).__name__
+        else:
+            error = None if brief else "empty reply"
+        if not brief:
+            db_engine.log_event(TimelineEvent(
+                incident_id=incident_id, event_type="HANDOVER_BRIEF_FAILED", actor="Lyzr Handover Agent",
+                summary=f"No crew brief for {act.target_agency} ({error}); the dispatch itself went out",
+                details={"action_id": action_id}, is_failure_event=True,
+            ))
+            return False
+        sent, note = await dispatch_service.send_note(act, f"RESQ HANDOVER BRIEF (AI-written by Lyzr agent, check against the dispatch)\n{brief}")
+        db_engine.log_event(TimelineEvent(
+            incident_id=incident_id, event_type="HANDOVER_BRIEF", actor="Lyzr Handover Agent",
+            summary=f"Crew brief for {act.target_agency}: {brief}",
+            details={"action_id": action_id, "telegram": note if sent else f"not sent ({note})"},
+        ))
+        return True
 
     async def pre_alert(self, incident_id: str, action_id: str) -> CoordinationAction:
         """Heads-up to the department as soon as the call is routed. Not a dispatch: the operator still confirms."""

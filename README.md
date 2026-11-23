@@ -58,8 +58,10 @@ CONFIRMED DISPATCH + map link ──► department taps "Acknowledge" ──► 
 - Every state change goes through one validated state machine and is written to an audit timeline.
 
 **Operator dashboard**
-- Live queue and incident view (updates over Server-Sent Events).
-- Call conversation as a chat, map, fields with source and verification, reasoning (what's missing, contradictions, possible duplicates), dispatch cards, audit timeline.
+- One screen: live queue on the left, the selected call on the right (updates over Server-Sent Events).
+- Header with open, critical, awaiting-dispatch and notified counts, and which AI services are live (Gemini, Lyzr, BAND, Telegram).
+- Call conversation as a chat with the next question to ask, map, fields with source, confidence and verification, reasoning (what's missing, contradictions, possible duplicates).
+- Dispatch cards with progress (proposed, pre-alert, dispatched, acknowledged) and the Lyzr crew brief; an audit trail colour-coded by agent.
 - A timer from call start to the first department notified.
 
 ## Evaluation
@@ -70,7 +72,7 @@ Measured on [tests/eval_calls.jsonl](tests/eval_calls.jsonl): 30 calls **we wrot
 |---|---|---|
 | Category | 18/30 (60%) | 30/30 (100%) |
 | Right departments routed | 16/30 (53%) | 30/30 (100%) |
-| Injuries reported or not | 16/25 (64%) | 25/25 (100%) |
+| Injuries reported or not | 17/25 (68%) | 25/25 (100%) |
 | Caller away from the scene detected | 2/4 | 4/4 |
 | Incident location captured | 6/30 (20%) | 29/30 (97%) |
 | Median time per call | <0.1 s | 2.2 s (slowest 7.1 s) |
@@ -110,8 +112,19 @@ Then fill in `.env`. It is git-ignored, so keys never get committed:
 | `GEMINI_API_KEY` | Required for AI understanding. Without it, RESQ runs on keyword rules only. |
 | `TELEGRAM_BOT_TOKEN` | Optional. Without it, pre-alerts and dispatches are marked "simulated". |
 | `TELEGRAM_CHAT_AMBULANCE`, `TELEGRAM_CHAT_FIRE`, `TELEGRAM_CHAT_POLICE` | The Telegram group each department's messages go to. All three can be the same group. |
-| `GEMINI_MODELS` | Optional. The models to try in order (default `gemini-3.5-flash-lite,gemini-3.1-flash-lite`). |
+| `GEMINI_MODELS` | Optional. The models to try in order (default `gemini-3.5-flash-lite,gemini-3.5-flash`). |
 | `GEOCODE_VIEWBOX` | Optional. The map search area (default: Chennai). |
+| `LYZR_API_KEY` | Optional. The Lyzr agent that writes the crew brief (see below). |
+| `BAND_API_KEY` | Optional. The BAND room feed (see below). Needs Python 3.11+. |
+
+Each optional service switches itself off when its keys are missing, and a failure in one never blocks a dispatch.
+
+**Lyzr crew brief.** After the operator confirms a dispatch, a Lyzr agent writes a 5-line brief for the responding crew: what happened, where to go (and whether that's confirmed), patients and hazards, and the first thing to check. It goes out as a reply in the department's Telegram thread and appears on the incident timeline, marked as AI-written. The fixed dispatch template still goes out first and unchanged.
+Put your Lyzr API key in `LYZR_API_KEY`. On the first dispatch RESQ creates a "RESQ Handover Agent" on your Lyzr account and reuses it from then on. To use an agent you built yourself instead, set `LYZR_AGENT_ID`.
+
+**BAND room.** RESQ joins a [BAND](https://band.ai) room as an agent. The voice, reasoning and coordination agents' timeline is posted there live, and anyone in the room can ask `@RESQ status` (open incidents) or `@RESQ <last 6 characters of an incident ID>`.
+Put your BAND account's API key in `BAND_API_KEY`. On first start, RESQ registers a "RESQ" agent on your account and opens a "RESQ live feed" room with you in it. The agent's own key and the room ID are saved in `backend/band_agent.json` (git-ignored), so restarts reuse both. An agent API key works in `BAND_API_KEY` too. To use a different room, set `BAND_ROOM_ID`.
+
 
 **Telegram setup (about 10 minutes):**
 1. In Telegram, message **@BotFather** and send `/newbot`. Put the token it gives you in `TELEGRAM_BOT_TOKEN`. One bot serves every department.

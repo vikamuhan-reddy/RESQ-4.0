@@ -10,9 +10,9 @@ from typing import Optional, List, Literal
 
 from pydantic import BaseModel, Field
 
-# Tried in order. Lite models answer in ~2-4 s; full Flash took 17-23 s in testing. 503 "high demand"
+# Tried in order. 3.5 Flash-Lite answers in ~1 s once warm, 3.5 Flash in ~3 s (2026-11-23). 503 "high demand"
 # spikes are common, so a second model usually answers when the first doesn't.
-MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-3.1-flash-lite").split(",") if m.strip()]
+MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "gemini-3.5-flash-lite,gemini-3.5-flash").split(",") if m.strip()]
 EXTRACT_TIMEOUT_S = 7
 TRANSCRIBE_TIMEOUT_S = 20
 
@@ -78,7 +78,13 @@ async def warm_up() -> None:
 
 async def _generate(client, contents, timeout: float, config=None):
     last_error = None
-    for model in MODELS:
+    # A 503 "high demand" usually clears within a second, so the first model gets one retry on a 503 only
+    # (not on a timeout, which would just double the wait).
+    for i, model in enumerate([MODELS[0]] + MODELS):
+        if i == 1 and "503" not in str(last_error):
+            continue
+        if i == 1:
+            await asyncio.sleep(0.5)
         try:
             return await asyncio.wait_for(
                 client.aio.models.generate_content(model=model, contents=contents, config=config), timeout

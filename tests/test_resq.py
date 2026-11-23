@@ -11,8 +11,9 @@ import tempfile
 os.environ["RESQ_DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 # Keyword path only, so results are deterministic. Empty (not unset) so load_dotenv() won't refill it from .env
 os.environ["GEMINI_API_KEY"] = ""
-for _k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_AMBULANCE", "TELEGRAM_CHAT_FIRE", "TELEGRAM_CHAT_POLICE"):
-    os.environ[_k] = ""  # never message real Telegram groups from tests, whatever .env says
+for _k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_AMBULANCE", "TELEGRAM_CHAT_FIRE", "TELEGRAM_CHAT_POLICE",
+           "LYZR_API_KEY", "LYZR_AGENT_ID", "BAND_AGENT_ID", "BAND_API_KEY"):
+    os.environ[_k] = ""  # never message real Telegram groups or call Lyzr/BAND from tests, whatever .env says
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
@@ -466,6 +467,61 @@ def test_conversation_suggested_pin_and_pre_alert():
         os.environ["TELEGRAM_BOT_TOKEN"], os.environ["TELEGRAM_CHAT_FIRE"] = "", ""
 
 
+def test_lyzr_brief_and_band_feed():
+    import backend.services.lyzr_service as lyzr
+    from backend.services import band_service
+    print(">>> 25. Lyzr crew brief after dispatch (and when Lyzr fails); BAND feed lines and @RESQ answers...")
+    inc = orchestrator.create_incident("Fire Hazard", "en")
+    db_engine.add_turn(inc.incident_id, "caller", "Fire in the godown near the market")
+    act = coordination_agent.create_action_proposal(inc, "NOTIFY_FIRE_RESCUE", "Fire & Rescue (101)")
+    asyncio.run(orchestrator.approve_and_dispatch(inc.incident_id, act.action_id, "Op"))
+    assert asyncio.run(orchestrator.send_handover_brief(inc.incident_id, act.action_id)) is False  # no keys: no call, no event
+
+    calls, chats, status = [], [], [200]
+
+    def fake_lyzr(request):
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/v3/agents/":  # only the API key is configured: find our agent, else create it
+            return httpx.Response(200, json={"agents": [{"id": "other", "name": "Finance Advisor"}]} if request.method == "GET" else {"agent_id": "new1"})
+        chats.append(json.loads(request.content))
+        return httpx.Response(status[0], json={"response": "Fire at a godown near the market (caller's words). Verify the address first."})
+
+    os.environ["LYZR_API_KEY"] = "k"
+    lyzr.httpx = types.SimpleNamespace(AsyncClient=lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(fake_lyzr), **kw))
+    try:
+        assert asyncio.run(orchestrator.send_handover_brief(inc.incident_id, act.action_id)) is True
+        assert calls == ["GET /v3/agents/", "POST /v3/agents/", "POST /v3/inference/chat/"]
+        assert chats[0]["agent_id"] == "new1" and chats[0]["session_id"].endswith(inc.incident_id)
+        assert "Caller: Fire in the godown" in chats[0]["message"] and "To: Fire & Rescue" in chats[0]["message"]
+        status[0] = 500
+        assert asyncio.run(orchestrator.send_handover_brief(inc.incident_id, act.action_id)) is False
+        assert calls[3:] == ["POST /v3/inference/chat/"]  # the agent id is cached, not looked up again
+    finally:
+        lyzr.httpx, lyzr._agent_id = httpx, None
+        os.environ["LYZR_API_KEY"] = ""
+    events = {e.event_type: e for e in db_engine.get_events(inc.incident_id)}
+    assert "godown" in events["HANDOVER_BRIEF"].summary
+    assert events["HANDOVER_BRIEF_FAILED"].is_failure_event and "HTTPStatusError" in events["HANDOVER_BRIEF_FAILED"].summary
+
+    # Timeline listeners (the BAND feed) see every stored event, and a broken one can't stop the record
+    got = []
+    db_engine.listeners[:] = [lambda e: 1 / 0, got.append]
+    try:
+        orchestrator.operator_acknowledge(inc.incident_id, "Op")
+    finally:
+        db_engine.listeners.clear()
+    assert got and got[-1].event_type == "OPERATOR_ACKNOWLEDGED"
+    assert any(e.event_type == "OPERATOR_ACKNOWLEDGED" for e in db_engine.get_events(inc.incident_id))
+
+    suffix = inc.incident_id[-6:]
+    assert band_service.feed_line(events["HANDOVER_BRIEF"]).startswith(f"[Lyzr Handover Agent] {suffix}: ")
+    assert band_service.feed_line(events["HANDOVER_BRIEF_FAILED"]).startswith("⚠ ")
+    incidents = db_engine.list_incidents()
+    assert band_service.answer(f"@RESQ what about {suffix.lower()}?", incidents).startswith(inc.incident_id)
+    listing = band_service.answer("@RESQ status", incidents)
+    assert listing.startswith("Open incidents") and suffix in listing
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_guards()
@@ -476,4 +532,5 @@ if __name__ == "__main__":
     test_duplicate_callers()
     test_caller_screen_and_device_location()
     test_conversation_suggested_pin_and_pre_alert()
+    test_lyzr_brief_and_band_feed()
     print("ALL CHECKS PASSED")

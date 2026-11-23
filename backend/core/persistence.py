@@ -20,6 +20,7 @@ class PersistenceEngine:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self._memory_cache: Dict[str, IncidentRecord] = {}
+        self.listeners = []  # called with each TimelineEvent after it is stored (the BAND room feed)
         self._init_db()
         self.restore_cache_from_disk()
 
@@ -180,6 +181,11 @@ class PersistenceEngine:
                     1 if event.is_failure_event else 0
                 ))
                 conn.commit()
+        for listener in self.listeners:
+            try:
+                listener(event)
+            except Exception as e:  # a feed must never break the record
+                print(f"[timeline listener] {type(e).__name__}: {e}")
 
     def get_events(self, incident_id: str) -> List[TimelineEvent]:
         with self._lock:

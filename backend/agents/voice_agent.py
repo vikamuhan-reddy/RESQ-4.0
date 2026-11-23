@@ -58,6 +58,10 @@ CALLER_AWAY_PHRASES = [
     "saw it from afar", "not there", "நான் இங்க இல்ல", "அலுவலகத்தில் இருந்து"
 ]
 
+INJURY_WORDS = ["injur", "hurt", "bleeding", "unconscious", "casualt", "burn", "collapsed", "not breathing",
+                "fainted", "fracture", "காயம்", "ரத்தம்", "தீக்காய", "மயக்கம்"]
+NO_INJURY_PHRASES = ["nobody hurt", "no one hurt", "nobody is hurt", "no one is hurt", "not hurt", "no injur", "nobody injured"]
+
 DANGER_KEYWORDS = ["fire", "smoke", "explosion", "leak", "trapped", "unconscious",
                    "bleeding", "தீ", "புகை", "மயக்கம்"]
 
@@ -273,7 +277,9 @@ class VoiceIntelligenceAgent:
             count = 1; injuries = "One individual injured"
         elif "three" in text_lower or "3 people" in text_lower or "மூன்று பேர்" in text:
             count = 3; injuries = "Three individuals injured"
-        elif any(w in text_lower for w in ["injur", "hurt", "bleeding", "unconscious", "casualt", "காயம்", "ரத்தம்"]):
+        elif any(w in text_lower for w in NO_INJURY_PHRASES):
+            pass
+        elif any(w in text_lower for w in INJURY_WORDS):
             injuries = "Injuries reported by caller (count unconfirmed)"
         return injuries, count
 
