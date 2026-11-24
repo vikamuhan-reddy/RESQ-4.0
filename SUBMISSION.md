@@ -24,7 +24,16 @@ Voice — Listen & Act
 Pick the public RESQ repository under your account (see "Pushing to GitHub" at the end of this file).
 
 ## Deployed demo URL
-**(fill in)** The public HTTPS link where RESQ is running. The dashboard is at `/` and the caller screen at `/caller`.
+The public HTTPS link from the Cloudflare tunnel, for example `https://<random-words>.trycloudflare.com`. The dashboard is at `/` and the caller screen at `/caller`.
+
+The link works only while the laptop, the server and the tunnel are running, and it **changes every time the tunnel restarts**. To get a fresh one:
+
+```powershell
+python run_server.py                                   # terminal 1
+cloudflared tunnel --no-autoupdate --url http://localhost:8000   # terminal 2: prints the https://….trycloudflare.com link
+```
+
+Keep both terminals open until judging is over.
 
 ---
 
